@@ -9,6 +9,7 @@ export default async function ScheduleOverridesPage() {
     dateISO: DateTime.fromJSDate(r.date, { zone: "utc" }).toISODate()!,
     isClosed: r.isClosed,
     label: DateTime.fromJSDate(r.date, { zone: "utc" }).setLocale("ja").toFormat("M月d日 (ccc)"),
+    ranges: r.ranges,
   }));
 
   return (

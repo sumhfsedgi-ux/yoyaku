@@ -24,6 +24,10 @@ interface Range {
 function minuteToTimeValue(minute: number): string {
   return `${Math.floor(minute / 60).toString().padStart(2, "0")}:${(minute % 60).toString().padStart(2, "0")}`;
 }
+function formatRanges(ranges: { startMinute: number; endMinute: number }[]): string {
+  if (ranges.length === 0) return "時間変更あり";
+  return ranges.map((r) => `${minuteToTimeValue(r.startMinute)}〜${minuteToTimeValue(r.endMinute)}`).join("、");
+}
 function timeValueToMinute(value: string): number {
   const [h, m] = value.split(":").map(Number);
   return h * 60 + m;
@@ -38,6 +42,7 @@ export interface OverrideListItem {
   dateISO: string;
   isClosed: boolean;
   label: string;
+  ranges: { startMinute: number; endMinute: number }[];
 }
 
 /**
@@ -63,6 +68,7 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
         dateISO: DateTime.fromJSDate(r.date, { zone: "utc" }).toISODate()!,
         isClosed: r.isClosed,
         label: DateTime.fromJSDate(r.date, { zone: "utc" }).setLocale("ja").toFormat("M月d日 (ccc)"),
+        ranges: r.ranges,
       })),
     );
   }
@@ -188,7 +194,7 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
             {existing.map((item) => (
               <div key={item.dateISO} className="flex items-center justify-between rounded-lg border border-border bg-card px-3 py-2 text-sm">
                 <span>
-                  {item.label} - {item.isClosed ? "終日休み" : "時間変更あり"}
+                  {item.label} - {item.isClosed ? "終日休み" : formatRanges(item.ranges)}
                 </span>
                 <Button variant="ghost" size="icon-touch" aria-label="削除" onClick={() => handleDelete(item.dateISO)}>
                   <Trash2Icon className="size-4 text-destructive" />
