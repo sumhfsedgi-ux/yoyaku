@@ -5,6 +5,7 @@ import { Bar, BarChart, CartesianGrid, LabelList, XAxis, YAxis } from "recharts"
 import { Button } from "@/components/ui/button";
 import { ChartContainer, type ChartConfig } from "@/components/ui/chart";
 import { EmptyState } from "@/components/ui/empty-state";
+import { BAR_SIZE, CategoryAxisTick, MIN_CHART_HEIGHT, ROW_HEIGHT, Y_AXIS_WIDTH } from "@/components/admin/analytics/horizontalBarChartLayout";
 import type { AcquisitionSourceBreakdownRow } from "@/lib/analytics/kpi";
 
 type Metric = "newCustomerCount" | "revenue";
@@ -41,12 +42,12 @@ export function AcquisitionSourceChart({ rows }: { rows: AcquisitionSourceBreakd
           売上
         </Button>
       </div>
-      <ChartContainer config={chartConfig} className="aspect-auto w-full" style={{ height: Math.max(rows.length * 40, 120) }}>
+      <ChartContainer config={chartConfig} className="aspect-auto w-full" style={{ height: Math.max(rows.length * ROW_HEIGHT, MIN_CHART_HEIGHT) }}>
         <BarChart data={sortedRows} layout="vertical" margin={{ left: 0, right: 40, top: 0, bottom: 0 }}>
           <CartesianGrid horizontal={false} />
           <XAxis type="number" domain={[0, (max: number) => max * 1.15]} tickLine={false} axisLine={false} hide />
-          <YAxis dataKey="sourceName" type="category" tickLine={false} axisLine={false} width={100} />
-          <Bar dataKey={metric} fill={`var(--color-${metric})`} radius={4} activeBar={false}>
+          <YAxis dataKey="sourceName" type="category" tickLine={false} axisLine={false} width={Y_AXIS_WIDTH} tick={<CategoryAxisTick />} />
+          <Bar dataKey={metric} fill={`var(--color-${metric})`} radius={4} barSize={BAR_SIZE} activeBar={false}>
             <LabelList
               dataKey={metric}
               position="right"

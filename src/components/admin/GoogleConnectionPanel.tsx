@@ -74,7 +74,7 @@ export function GoogleConnectionPanel({ initialStatus }: { initialStatus: Google
         onTest={handleTestCalendar}
         testing={testingCalendar}
       >
-        {status.calendar.connected && status.calendar.roomCalendars.length > 0 && (
+        {status.calendar.connected && status.calendar.roomCalendars.length > 1 && (
           <div className="mt-4 border-t border-border pt-4">
             <p className="mb-3 text-sm font-semibold text-foreground">部屋ごとのカレンダーID</p>
             {status.calendar.roomCalendars.map((rc) => (

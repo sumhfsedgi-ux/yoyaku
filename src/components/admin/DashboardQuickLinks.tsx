@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BarChart3Icon, ContactIcon, ShoppingBagIcon } from "lucide-react";
+import { BarChart3Icon, ContactIcon, ShoppingBagIcon, UsersIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FOCUS_RING } from "@/lib/ui/interactionStyles";
 
@@ -14,6 +14,7 @@ export function DashboardQuickLinks() {
     { href: "/customers", label: "顧客", icon: ContactIcon },
     { href: "/analytics", label: "分析", icon: BarChart3Icon },
     { href: "/retail", label: "小売実績", icon: ShoppingBagIcon },
+    { href: "/staff", label: "スタッフ管理", icon: UsersIcon },
   ];
 
   return (
