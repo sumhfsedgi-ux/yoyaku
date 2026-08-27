@@ -36,7 +36,6 @@ export interface StaffAvailabilityConfig {
   active: boolean;
   weekly: WeeklyRule[];
   overridesByDate: Map<string, OverrideRule>;
-  blocks: InstantRange[];
   cutoff: CutoffConfig;
   bookingWindowDays: number;
 }
@@ -44,7 +43,6 @@ export interface StaffAvailabilityConfig {
 export type UnavailableReason =
   | "INVALID_START_TIME"
   | "OUT_OF_HOURS"
-  | "STAFF_BLOCK"
   | "PAST_CUTOFF"
   | "OUT_OF_WINDOW"
   | "ROOM_CONFLICT"

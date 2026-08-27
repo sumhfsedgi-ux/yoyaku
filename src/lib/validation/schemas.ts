@@ -57,14 +57,6 @@ export const weeklyAvailabilityRangeSchema = z
   })
   .refine((r) => r.endMinute > r.startMinute, { message: "終了時刻は開始時刻より後にしてください" });
 
-export const staffBlockInputSchema = z
-  .object({
-    startAt: z.string().datetime(),
-    endAt: z.string().datetime(),
-    reason: z.string().max(200).optional(),
-  })
-  .refine((r) => new Date(r.endAt) > new Date(r.startAt), { message: "終了時刻は開始時刻より後にしてください" });
-
 export const bookingCutoffSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("HOURS_BEFORE"), hours: z.number().int().min(0).max(24 * 30) }),
   z.object({

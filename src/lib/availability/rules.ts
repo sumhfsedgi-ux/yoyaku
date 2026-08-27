@@ -43,10 +43,6 @@ export function intervalsOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: D
   return aStart < bEnd && aEnd > bStart;
 }
 
-export function overlapsAnyBlock(start: Date, end: Date, blocks: InstantRange[]): boolean {
-  return blocks.some((block) => intervalsOverlap(start, end, block.start, block.end));
-}
-
 export function overlapsAnyInterval(start: Date, end: Date, intervals: InstantRange[]): boolean {
   return intervals.some((interval) => intervalsOverlap(start, end, interval.start, interval.end));
 }

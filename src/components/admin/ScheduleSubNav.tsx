@@ -8,7 +8,6 @@ import { FOCUS_RING } from "@/lib/ui/interactionStyles";
 const TABS = [
   { href: "/schedule/weekly", label: "通常スケジュール" },
   { href: "/schedule/overrides", label: "個別日付変更" },
-  { href: "/schedule/blocks", label: "受付不可時間" },
 ];
 
 export function ScheduleSubNav() {

@@ -5,7 +5,6 @@ import {
   intervalsOverlap,
   isPastCutoff,
   isWithinBookingWindow,
-  overlapsAnyBlock,
   resolveEffectiveRanges,
 } from "@/lib/availability/rules";
 import { SALON_TIME_ZONE } from "@/lib/availability/types";
@@ -54,18 +53,6 @@ describe("intervalsOverlap (spec cases 1-3)", () => {
     expect(intervalsOverlap(jst("2026-08-30T13:01"), jst("2026-08-30T14:31"), existingStart, existingEnd)).toBe(
       true,
     );
-  });
-});
-
-describe("overlapsAnyBlock", () => {
-  it("case 7: staff block 13:00-14:00, candidate 12:45-14:15 -> blocked", () => {
-    const blocks = [{ start: jst("2026-08-30T13:00"), end: jst("2026-08-30T14:00") }];
-    expect(overlapsAnyBlock(jst("2026-08-30T12:45"), jst("2026-08-30T14:15"), blocks)).toBe(true);
-  });
-
-  it("candidate entirely outside the block -> not blocked", () => {
-    const blocks = [{ start: jst("2026-08-30T13:00"), end: jst("2026-08-30T14:00") }];
-    expect(overlapsAnyBlock(jst("2026-08-30T14:00"), jst("2026-08-30T15:30"), blocks)).toBe(false);
   });
 });
 

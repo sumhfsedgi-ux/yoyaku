@@ -10,7 +10,6 @@
 const USER_MESSAGES: Record<string, string> = {
   INVALID_START_TIME: "この時間はご予約いただけません。他の時間をお選びください。",
   OUT_OF_HOURS: "この時間はご予約いただけません。他の時間をお選びください。",
-  STAFF_BLOCK: "この時間はご予約いただけません。他の時間をお選びください。",
   PAST_CUTOFF: "この時間はご予約の受付を終了しました。他の時間をお選びください。",
   OUT_OF_WINDOW: "この日はまだご予約を受け付けておりません。",
   ROOM_CONFLICT: "この時間はご予約いただけません。他の時間をお選びください。",

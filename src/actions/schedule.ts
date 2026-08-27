@@ -2,11 +2,7 @@
 
 import { prisma } from "@/lib/db/prisma";
 import { requireStaffSession } from "@/lib/auth/session";
-import {
-  bookingCutoffSchema,
-  staffBlockInputSchema,
-  weeklyAvailabilityRangeSchema,
-} from "@/lib/validation/schemas";
+import { bookingCutoffSchema, weeklyAvailabilityRangeSchema } from "@/lib/validation/schemas";
 import type { z } from "zod";
 
 /**
@@ -106,34 +102,6 @@ export async function deleteMyScheduleOverride(dateISO: string) {
   const session = await requireStaffSession();
   const date = new Date(`${dateISO}T00:00:00.000Z`);
   await prisma.scheduleOverride.deleteMany({ where: { staffId: session.staffId, date } });
-}
-
-export async function getMyStaffBlocks(fromDateUtcIso: string, toDateUtcIso: string) {
-  const session = await requireStaffSession();
-  return prisma.staffBlock.findMany({
-    where: { staffId: session.staffId, startAt: { lt: new Date(toDateUtcIso) }, endAt: { gt: new Date(fromDateUtcIso) } },
-    orderBy: { startAt: "asc" },
-  });
-}
-
-export type CreateStaffBlockInput = z.infer<typeof staffBlockInputSchema>;
-
-export async function createMyStaffBlock(input: CreateStaffBlockInput) {
-  const session = await requireStaffSession();
-  const parsed = staffBlockInputSchema.parse(input);
-  return prisma.staffBlock.create({
-    data: {
-      staffId: session.staffId,
-      startAt: new Date(parsed.startAt),
-      endAt: new Date(parsed.endAt),
-      reason: parsed.reason,
-    },
-  });
-}
-
-export async function deleteMyStaffBlock(blockId: string) {
-  const session = await requireStaffSession();
-  await prisma.staffBlock.deleteMany({ where: { id: blockId, staffId: session.staffId } });
 }
 
 export interface MyBookingSettings {

@@ -3,7 +3,7 @@ import { getCalendarService } from "@/lib/google/calendar/factory";
 import { resolveRoomCalendarId } from "@/lib/google/roomCalendar";
 import { resolvePrimaryRoomId } from "@/lib/room";
 import type { ComputeSlotsDeps } from "./engine";
-import type { CutoffConfig, InstantRange, OverrideRule, StaffAvailabilityConfig, WeeklyRule } from "./types";
+import type { CutoffConfig, OverrideRule, StaffAvailabilityConfig, WeeklyRule } from "./types";
 
 /** Real, Prisma + Google Calendar backed implementation of ComputeSlotsDeps. */
 export const prismaAvailabilityDeps: ComputeSlotsDeps = {
@@ -13,7 +13,6 @@ export const prismaAvailabilityDeps: ComputeSlotsDeps = {
       include: {
         weeklyAvailability: true,
         scheduleOverrides: { include: { ranges: true } },
-        staffBlocks: true,
       },
     });
     if (!staff) return null;
@@ -38,8 +37,6 @@ export const prismaAvailabilityDeps: ComputeSlotsDeps = {
       });
     }
 
-    const blocks: InstantRange[] = staff.staffBlocks.map((b) => ({ start: b.startAt, end: b.endAt }));
-
     const cutoff: CutoffConfig =
       staff.bookingCutoffType === "HOURS_BEFORE"
         ? { type: "HOURS_BEFORE", hours: staff.bookingCutoffHours ?? 0 }
@@ -54,7 +51,6 @@ export const prismaAvailabilityDeps: ComputeSlotsDeps = {
       active: staff.active,
       weekly,
       overridesByDate,
-      blocks,
       cutoff,
       bookingWindowDays: staff.bookingWindowDays,
     };

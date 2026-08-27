@@ -111,7 +111,6 @@ model Staff {
 
   weeklyAvailability       WeeklyAvailability[]
   scheduleOverrides        ScheduleOverride[]
-  staffBlocks              StaffBlock[]
   customers                Customer[]
   reservations             Reservation[]             @relation("AssignedStaff")
   concernMasters           ConcernMaster[]
@@ -154,19 +153,6 @@ model ScheduleOverrideRange {
   scheduleOverride   ScheduleOverride @relation(fields: [scheduleOverrideId], references: [id], onDelete: Cascade)
   startMinute        Int
   endMinute          Int
-}
-
-/// Ad-hoc "do not book me" windows a staff member sets themselves, distinct from
-/// Google Calendar busy time. Never shown to customers beyond making the slot disappear.
-model StaffBlock {
-  id      String   @id @default(cuid())
-  staffId String
-  staff   Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
-  startAt DateTime @db.Timestamptz
-  endAt   DateTime @db.Timestamptz
-  reason  String?
-
-  @@index([staffId, startAt, endAt])
 }
 
 /// A customer belongs to exactly one staff (ownerStaffId). The same email under two

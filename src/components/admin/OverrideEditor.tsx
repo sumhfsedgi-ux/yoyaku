@@ -6,7 +6,7 @@ import { DateTime } from "luxon";
 import { PlusIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { DateStrip } from "@/components/reserve/DateStrip";
+import { ScheduleMonthPicker } from "@/components/admin/ScheduleMonthPicker";
 import { cn } from "@/lib/utils";
 import { FOCUS_RING } from "@/lib/ui/interactionStyles";
 import {
@@ -101,14 +101,14 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <section>
+    <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_320px] md:items-start">
+      <section className="md:col-start-1 md:row-start-1">
         <p className="mb-2 text-sm font-medium text-foreground">日付を選択</p>
-        <DateStrip selectedISO={dateISO} onSelect={setDateISO} windowDays={90} />
+        <ScheduleMonthPicker selectedISO={dateISO} onSelect={setDateISO} />
       </section>
 
       {dateISO && (
-        <section className="rounded-xl border border-border bg-card p-4">
+        <section className="rounded-xl border border-border bg-card p-4 md:col-start-2 md:row-start-1 md:row-span-2">
           <p className="mb-3 text-sm font-semibold text-foreground">
             {DateTime.fromISO(dateISO).setLocale("ja").toFormat("M月d日 (ccc)")}
           </p>
@@ -173,7 +173,13 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
         </section>
       )}
 
-      <section>
+      {!dateISO && (
+        <section className="hidden items-center justify-center rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground md:col-start-2 md:row-start-1 md:row-span-2 md:flex">
+          日付を選択してください
+        </section>
+      )}
+
+      <section className="md:col-start-1 md:row-start-2">
         <p className="mb-2 text-sm font-medium text-foreground">設定済みの個別日付</p>
         {existing.length === 0 ? (
           <p className="text-sm text-muted-foreground">設定はありません。</p>

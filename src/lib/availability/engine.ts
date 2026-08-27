@@ -2,7 +2,6 @@ import { DateTime } from "luxon";
 import {
   isPastCutoff,
   isWithinBookingWindow,
-  overlapsAnyBlock,
   overlapsAnyInterval,
   generateCandidateStarts,
   resolveEffectiveRanges,
@@ -88,7 +87,6 @@ function isCandidateBookable(
   const startJs = candidateStart.toJSDate();
   const endJs = candidateEnd.toJSDate();
 
-  if (overlapsAnyBlock(startJs, endJs, config.blocks)) return { ok: false, reason: "STAFF_BLOCK" };
   if (isPastCutoff(candidateStart, now, config.cutoff)) return { ok: false, reason: "PAST_CUTOFF" };
   if (!isWithinBookingWindow(dateISO, now.setZone(SALON_TIME_ZONE), config.bookingWindowDays)) {
     return { ok: false, reason: "OUT_OF_WINDOW" };
@@ -195,7 +193,6 @@ export type ValidateSlotBookableResult =
       reason:
         | "INVALID_START_TIME"
         | "OUT_OF_HOURS"
-        | "STAFF_BLOCK"
         | "PAST_CUTOFF"
         | "OUT_OF_WINDOW"
         | "ROOM_CONFLICT"

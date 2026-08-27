@@ -107,7 +107,7 @@ async function main() {
     }
   }
 
-  // Demo data on the first staff only: one schedule override, one staff block.
+  // Demo data on the first staff only: one schedule override.
   const demoStaff = await prisma.staff.findUniqueOrThrow({ where: { loginEmail: SAMPLE_STAFF[0].loginEmail } });
 
   const overrideDate = nextDateForWeekday(6); // upcoming Saturday
@@ -122,21 +122,6 @@ async function main() {
         isClosed: false,
         ranges: { create: [{ startMinute: 12 * 60, endMinute: 17 * 60 }] },
       },
-    });
-  }
-
-  const blockDate = nextDateForWeekday(2); // upcoming Tuesday
-  const blockStart = new Date(blockDate);
-  blockStart.setUTCHours(4, 0, 0, 0); // 13:00 JST
-  const blockEnd = new Date(blockDate);
-  blockEnd.setUTCHours(5, 0, 0, 0); // 14:00 JST
-
-  const existingBlock = await prisma.staffBlock.findFirst({
-    where: { staffId: demoStaff.id, startAt: blockStart, endAt: blockEnd },
-  });
-  if (!existingBlock) {
-    await prisma.staffBlock.create({
-      data: { staffId: demoStaff.id, startAt: blockStart, endAt: blockEnd, reason: "デモ用の受付不可時間" },
     });
   }
 

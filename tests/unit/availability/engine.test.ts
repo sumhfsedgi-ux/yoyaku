@@ -11,7 +11,6 @@ import { SALON_TIME_ZONE } from "@/lib/availability/types";
 
 const ROOM_ID = "room_001";
 const STAFF_A = "stf_a";
-const STAFF_B = "stf_b";
 
 function jst(iso: string): Date {
   return DateTime.fromISO(iso, { zone: SALON_TIME_ZONE }).toJSDate();
@@ -31,7 +30,6 @@ function baseConfig(staffId: string, overrides: Partial<StaffAvailabilityConfig>
       { dayOfWeek: 6, ranges: [] },
     ],
     overridesByDate: new Map(),
-    blocks: [],
     cutoff: { type: "HOURS_BEFORE", hours: 0 },
     bookingWindowDays: 60,
     ...overrides,
@@ -127,27 +125,6 @@ describe("computeAvailableSlots", () => {
     };
     const result = await computeAvailableSlots({ staffId: STAFF_A, dateISO: MONDAY, now: NOW }, makeDeps(world));
     expect(result).toEqual({ ok: false, reason: "CALENDAR_UNAVAILABLE" });
-  });
-
-  it("case 7: a staff block removes overlapping candidates for that staff only", async () => {
-    const world: FakeWorld = {
-      configs: new Map([
-        [STAFF_A, baseConfig(STAFF_A, { blocks: [{ start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:00`) }] })],
-        [STAFF_B, baseConfig(STAFF_B)],
-      ]),
-      roomReservations: [],
-      calendarBusy: [],
-    };
-    const deps = makeDeps(world);
-    const resultA = await computeAvailableSlots({ staffId: STAFF_A, dateISO: MONDAY, now: NOW }, deps);
-    const resultB = await computeAvailableSlots({ staffId: STAFF_B, dateISO: MONDAY, now: NOW }, deps);
-    expect(resultA.ok && resultB.ok).toBe(true);
-    if (!resultA.ok || !resultB.ok) return;
-    // 12:45-14:15 overlaps staff A's 13:00-14:00 block -> both 12:45 and 13:00 starts excluded for A
-    const blockedForA = DateTime.fromISO(`${MONDAY}T12:45`, { zone: SALON_TIME_ZONE }).toUTC().toISO();
-    expect(resultA.slots).not.toContain(blockedForA);
-    // staff B has no block, same start time is fine
-    expect(resultB.slots).toContain(blockedForA);
   });
 
   it("respects the booking cutoff and window when computing today's or far-future slots", async () => {
@@ -494,7 +471,6 @@ describe("computeAvailabilityForRange", () => {
           STAFF_A,
           baseConfig(STAFF_A, {
             overridesByDate: new Map([["2026-08-28", { date: "2026-08-28", isClosed: true, ranges: [] }]]),
-            blocks: [{ start: jst("2026-08-25T10:00"), end: jst("2026-08-25T19:00") }],
           }),
         ],
       ]),

@@ -20,7 +20,6 @@ export async function resetDb() {
   await prisma.visitRecord.deleteMany();
   await prisma.reservation.deleteMany();
   await prisma.customer.deleteMany();
-  await prisma.staffBlock.deleteMany();
   await prisma.scheduleOverrideRange.deleteMany();
   await prisma.scheduleOverride.deleteMany();
   await prisma.weeklyAvailability.deleteMany();

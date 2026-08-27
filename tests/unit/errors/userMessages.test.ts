@@ -7,7 +7,6 @@ import { hasUserMessage, toUserMessage } from "@/lib/errors/userMessages";
 const ALL_REASON_CODES = [
   "INVALID_START_TIME",
   "OUT_OF_HOURS",
-  "STAFF_BLOCK",
   "PAST_CUTOFF",
   "OUT_OF_WINDOW",
   "ROOM_CONFLICT",
