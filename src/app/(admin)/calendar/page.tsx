@@ -64,9 +64,9 @@ export default async function CalendarPage({
         </>
       ) : (
         <>
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-2 flex items-center justify-between sm:mb-4">
             <Button
-              variant="outline"
+              variant="ghost"
               size="icon-touch"
               render={<Link href={`/calendar?view=month&scope=${scope}&date=${current.minus({ months: 1 }).toISODate()}`} aria-label="前の月" />}
             >
@@ -74,7 +74,7 @@ export default async function CalendarPage({
             </Button>
             <p className="text-sm font-medium text-foreground">{current.toFormat("yyyy年M月")}</p>
             <Button
-              variant="outline"
+              variant="ghost"
               size="icon-touch"
               render={<Link href={`/calendar?view=month&scope=${scope}&date=${current.plus({ months: 1 }).toISODate()}`} aria-label="次の月" />}
             >
@@ -82,7 +82,7 @@ export default async function CalendarPage({
             </Button>
           </div>
           <Suspense key={`month-${scope}-${current.year}-${current.month}`} fallback={<MonthGridSkeleton />}>
-            <MonthSection year={current.year} month={current.month} scope={scope} />
+            <MonthSection year={current.year} month={current.month} scope={scope} dateISO={dateISO} />
           </Suspense>
         </>
       )}
@@ -104,10 +104,10 @@ function DayTimelineSkeleton() {
 
 function MonthGridSkeleton() {
   return (
-    <div className="rounded-xl border border-border bg-card p-3">
-      <div className="grid grid-cols-7 gap-1">
-        {Array.from({ length: 35 }, (_, i) => (
-          <Skeleton key={i} className="h-16 w-full sm:h-20 md:h-24" />
+    <div className="rounded-xl border border-border bg-card p-2 sm:p-3">
+      <div className="grid grid-cols-7 gap-px sm:gap-1.5 md:gap-2">
+        {Array.from({ length: 42 }, (_, i) => (
+          <Skeleton key={i} className="h-14 w-full sm:h-[5.25rem] md:h-[6.5rem]" />
         ))}
       </div>
     </div>
@@ -123,11 +123,21 @@ async function DayTimelineSection({ dateISO, scope }: { dateISO: string; scope: 
   );
 }
 
-async function MonthSection({ year, month, scope }: { year: number; month: number; scope: "mine" | "room" }) {
+async function MonthSection({
+  year,
+  month,
+  scope,
+  dateISO,
+}: {
+  year: number;
+  month: number;
+  scope: "mine" | "room";
+  dateISO: string;
+}) {
   const entriesByDate = await getCalendarMonthData(year, month, scope);
   return (
-    <div className="rounded-xl border border-border bg-card p-3">
-      <MonthGrid year={year} month={month} entriesByDate={entriesByDate} scope={scope} />
+    <div className="rounded-xl border border-border bg-card p-2 sm:p-3">
+      <MonthGrid year={year} month={month} entriesByDate={entriesByDate} scope={scope} selectedDateISO={dateISO} />
     </div>
   );
 }

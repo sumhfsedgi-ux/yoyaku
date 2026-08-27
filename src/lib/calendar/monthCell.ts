@@ -28,7 +28,7 @@ export interface MonthCellTiers<T> {
  */
 export function computeMonthCellTiers<T>(entries: T[]): MonthCellTiers<T> {
   return {
-    mobile: truncateMonthEntries(entries, 1),
+    mobile: truncateMonthEntries(entries, 2),
     tablet: truncateMonthEntries(entries, 2),
     desktop: truncateMonthEntries(entries, 3),
   };

@@ -27,11 +27,11 @@ describe("truncateMonthEntries (spec case 6: month view overflow)", () => {
   });
 });
 
-describe("computeMonthCellTiers (responsive month-cell entry counts: mobile=1, tablet=2, desktop=3)", () => {
+describe("computeMonthCellTiers (responsive month-cell entry counts: mobile=2, tablet=2, desktop=3)", () => {
   it("computes independent visible/overflow splits for all three tiers from the same chronological list", () => {
     const entries = ["a", "b", "c", "d", "e"];
     const tiers = computeMonthCellTiers(entries);
-    expect(tiers.mobile).toEqual({ visible: ["a"], overflowCount: 4 });
+    expect(tiers.mobile).toEqual({ visible: ["a", "b"], overflowCount: 3 });
     expect(tiers.tablet).toEqual({ visible: ["a", "b"], overflowCount: 3 });
     expect(tiers.desktop).toEqual({ visible: ["a", "b", "c"], overflowCount: 2 });
   });

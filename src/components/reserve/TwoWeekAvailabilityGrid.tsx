@@ -9,15 +9,9 @@ import { isJpHoliday } from "@/lib/holidays/jpHolidays";
 import { formatGridDayLabel } from "@/lib/reserve/dateGrid";
 import { SALON_TIME_ZONE } from "@/lib/availability/types";
 import { FOCUS_RING, chipStateClasses } from "@/lib/ui/interactionStyles";
+import { weekdayAccentClass } from "@/lib/calendar/weekdayColor";
 
 const WEEKDAY_JA = ["日", "月", "火", "水", "木", "金", "土"];
-
-/** Saturday=blue, Sunday=red; a holiday (date-specific, so not applicable to the weekday header row) overrides Saturday-blue to red too. */
-function weekdayAccentClass(weekday: number, holiday: boolean): string {
-  if (weekday === 0 || holiday) return "text-rose-600 dark:text-rose-400";
-  if (weekday === 6) return "text-sky-600 dark:text-sky-400";
-  return "text-foreground";
-}
 
 export interface TwoWeekDayStatus {
   dateISO: string;

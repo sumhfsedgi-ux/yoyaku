@@ -12,14 +12,14 @@ interface CalendarTogglesProps {
   scope: CalendarScopeParam;
 }
 
-const SCOPE_OPTIONS: { value: CalendarScopeParam; label: string }[] = [
-  { value: "mine", label: "自分の予約" },
-  { value: "room", label: "部屋全体" },
+const SCOPE_OPTIONS: { value: CalendarScopeParam; label: string; shortLabel: string }[] = [
+  { value: "mine", label: "自分の予約", shortLabel: "自分" },
+  { value: "room", label: "部屋全体", shortLabel: "部屋" },
 ];
 
-const VIEW_OPTIONS: { value: CalendarViewParam; label: string }[] = [
-  { value: "day", label: "日表示" },
-  { value: "month", label: "月表示" },
+const VIEW_OPTIONS: { value: CalendarViewParam; label: string; shortLabel: string }[] = [
+  { value: "day", label: "日表示", shortLabel: "日" },
+  { value: "month", label: "月表示", shortLabel: "月" },
 ];
 
 /**
@@ -38,7 +38,7 @@ export function CalendarToggles({ dateISO, view, scope }: CalendarTogglesProps) 
   }
 
   return (
-    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+    <div className="flex flex-row items-center justify-between gap-2">
       <ToggleGroup
         label="表示対象"
         options={SCOPE_OPTIONS}
@@ -65,14 +65,14 @@ function ToggleGroup<T extends string>({
   onSelect,
 }: {
   label: string;
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; shortLabel: string }[];
   value: T;
   hrefFor: (v: T) => string;
   onSelect: (v: T) => void;
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <span className="hidden text-xs font-medium text-muted-foreground sm:inline">{label}</span>
       <div className="inline-flex rounded-lg bg-muted p-[3px]" role="group" aria-label={label}>
         {options.map((opt) => (
           <Link
@@ -88,7 +88,8 @@ function ToggleGroup<T extends string>({
                 : "text-muted-foreground hover:bg-background/60 hover:text-foreground active:bg-background/80",
             )}
           >
-            {opt.label}
+            <span className="sm:hidden">{opt.shortLabel}</span>
+            <span className="hidden sm:inline">{opt.label}</span>
           </Link>
         ))}
       </div>
