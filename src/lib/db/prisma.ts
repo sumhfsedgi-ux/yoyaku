@@ -1,4 +1,4 @@
-import { PrismaClient } from "@/generated/prisma";
+import { PrismaClient, type Prisma } from "@/generated/prisma";
 import { PrismaNeon } from "@prisma/adapter-neon";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
@@ -59,22 +59,41 @@ function shouldUseNeonAdapter(databaseUrl: string): boolean {
   }
 }
 
+// TEMPORARY (login-perf investigation, see .claude/plans): when PERF_DEBUG=1,
+// logs each query's duration + shape (never bound parameter values) so DB
+// round-trip counts/timings are visible without touching every call site.
+// Remove this block once the investigation is done, unless kept deliberately.
+const PERF_DEBUG = process.env.PERF_DEBUG === "1";
+
 function createPrismaClient(): PrismaClient {
   const connectionString = process.env.DATABASE_URL!;
+  const log: Prisma.LogDefinition[] | undefined = PERF_DEBUG ? [{ emit: "event", level: "query" }] : undefined;
 
   if (shouldUseNeonAdapter(connectionString)) {
     // Neon is a managed Postgres service and defaults new connections to a
     // UTC session timezone, so the adapter-pg pitfall documented above does
     // not apply here in practice. If that were ever not the case, the fix is
     // the same idea as below, applied to @neondatabase/serverless's Pool.
-    return new PrismaClient({ adapter: new PrismaNeon({ connectionString }) });
+    return new PrismaClient({ adapter: new PrismaNeon({ connectionString }), log });
   }
 
   const pool = new Pool({ connectionString, options: "-c TimeZone=UTC" });
-  return new PrismaClient({ adapter: new PrismaPg(pool) });
+  return new PrismaClient({ adapter: new PrismaPg(pool), log });
 }
 
 export const prisma = globalForPrisma.prisma ?? createPrismaClient();
+
+if (PERF_DEBUG) {
+  // Cast needed: $on's event map is only widened to include "query" when the
+  // client is constructed with a literal `log` tuple at the call site, which
+  // createPrismaClient()'s conditional (PERF_DEBUG-gated) log value defeats.
+  (prisma as unknown as { $on: (event: "query", cb: (e: { query: string; duration: number }) => void) => void }).$on(
+    "query",
+    (e) => {
+      console.log(`[perf:db] ${e.duration}ms ${e.query.slice(0, 120)}`);
+    },
+  );
+}
 
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;

@@ -12,7 +12,7 @@ export default async function ScheduleOverridesPage() {
   }));
 
   return (
-    <div className="mx-auto max-w-xl px-4 py-6 md:px-8 md:py-8">
+    <div className="mx-auto max-w-xl px-4 py-6 md:max-w-3xl md:px-8 md:py-8 lg:max-w-5xl">
       <h1 className="mb-1 text-xl font-semibold tracking-tight text-foreground">個別日付変更</h1>
       <p className="mb-6 text-sm text-muted-foreground">特定の日だけ通常スケジュールと異なる受付時間や休みを設定します。</p>
       <OverrideEditor initialOverrides={initialOverrides} />

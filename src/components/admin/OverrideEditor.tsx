@@ -101,14 +101,14 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
   }
 
   return (
-    <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_320px] md:items-start">
+    <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_320px] md:items-start lg:grid-cols-[minmax(420px,480px)_minmax(0,1fr)] lg:items-stretch">
       <section className="md:col-start-1 md:row-start-1">
         <p className="mb-2 text-sm font-medium text-foreground">日付を選択</p>
         <ScheduleMonthPicker selectedISO={dateISO} onSelect={setDateISO} />
       </section>
 
       {dateISO && (
-        <section className="rounded-xl border border-border bg-card p-4 md:col-start-2 md:row-start-1 md:row-span-2">
+        <section className="rounded-xl border border-border bg-card p-4 md:col-start-2 md:row-start-1 md:row-span-2 lg:row-span-1 lg:p-6">
           <p className="mb-3 text-sm font-semibold text-foreground">
             {DateTime.fromISO(dateISO).setLocale("ja").toFormat("M月d日 (ccc)")}
           </p>
@@ -174,12 +174,12 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
       )}
 
       {!dateISO && (
-        <section className="hidden items-center justify-center rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground md:col-start-2 md:row-start-1 md:row-span-2 md:flex">
+        <section className="hidden items-center justify-center rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground md:col-start-2 md:row-start-1 md:row-span-2 md:flex lg:row-span-1 lg:min-h-48 lg:self-start lg:p-6">
           日付を選択してください
         </section>
       )}
 
-      <section className="md:col-start-1 md:row-start-2">
+      <section className="md:col-start-1 md:row-start-2 lg:col-span-2">
         <p className="mb-2 text-sm font-medium text-foreground">設定済みの個別日付</p>
         {existing.length === 0 ? (
           <p className="text-sm text-muted-foreground">設定はありません。</p>

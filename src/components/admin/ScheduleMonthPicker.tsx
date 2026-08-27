@@ -54,7 +54,7 @@ export function ScheduleMonthPicker({ selectedISO, onSelect }: ScheduleMonthPick
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between md:mb-4 lg:mb-5">
         <Button
           type="button"
           variant="outline"
@@ -64,7 +64,9 @@ export function ScheduleMonthPicker({ selectedISO, onSelect }: ScheduleMonthPick
         >
           <ChevronLeftIcon />
         </Button>
-        <p className="text-sm font-medium text-foreground">{displayed.setLocale("ja").toFormat("yyyy年M月")}</p>
+        <p className="text-sm font-medium text-foreground md:flex-1 md:text-center md:text-base lg:text-lg">
+          {displayed.setLocale("ja").toFormat("yyyy年M月")}
+        </p>
         <Button
           type="button"
           variant="outline"
@@ -76,15 +78,15 @@ export function ScheduleMonthPicker({ selectedISO, onSelect }: ScheduleMonthPick
         </Button>
       </div>
 
-      <div className="mb-1 grid grid-cols-7 text-center text-xs font-medium text-muted-foreground">
+      <div className="mb-1 grid grid-cols-7 text-center text-xs font-medium text-muted-foreground md:mb-2 md:text-sm">
         {WEEKDAY_JA.map((w) => (
-          <div key={w} className="py-1">
+          <div key={w} className="py-1 md:py-1.5 lg:py-2">
             {w}
           </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-7 gap-1">
+      <div className="grid grid-cols-7 gap-1 md:gap-1.5 lg:gap-2">
         {days.map((day) => {
           const dateISO = day.toISODate()!;
           const inMonth = day.month === displayed.month;
@@ -101,7 +103,7 @@ export function ScheduleMonthPicker({ selectedISO, onSelect }: ScheduleMonthPick
               aria-current={isToday ? "date" : undefined}
               aria-label={`${day.toFormat("M月d日")}${hasOverride ? "（設定あり）" : ""}`}
               className={cn(
-                "relative flex aspect-square min-h-9 cursor-pointer flex-col items-center justify-center rounded-lg border text-sm transition-all active:scale-[0.98]",
+                "relative flex aspect-square min-h-9 cursor-pointer flex-col items-center justify-center rounded-lg border text-sm transition-all active:scale-[0.98] md:min-h-12 md:text-base md:rounded-xl lg:min-h-14",
                 FOCUS_RING,
                 selected
                   ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/80"
@@ -117,7 +119,7 @@ export function ScheduleMonthPicker({ selectedISO, onSelect }: ScheduleMonthPick
                 <span
                   aria-hidden="true"
                   className={cn(
-                    "absolute bottom-1.5 size-1.5 rounded-full",
+                    "absolute bottom-1.5 size-1.5 rounded-full md:bottom-2 md:size-2",
                     selected ? "bg-primary-foreground/80" : "bg-primary",
                   )}
                 />

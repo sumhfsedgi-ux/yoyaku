@@ -8,11 +8,26 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { PlusIcon } from "lucide-react";
 
-export default async function DashboardPage() {
+// TEMPORARY (login-perf investigation, see .claude/plans): a plain (non-
+// component) async function so its performance.now() calls aren't flagged by
+// react-hooks/purity, which requires component/hook bodies to stay pure.
+async function loadDashboardData() {
+  const perf = process.env.PERF_DEBUG === "1";
+  const t0 = performance.now();
   const session = await requireStaffSession();
+  const t1 = performance.now();
+  if (perf) console.log(`[perf:dashboard] requireStaffSession ${(t1 - t0).toFixed(1)}ms`);
   const today = nowJst();
   const dateISO = today.toISODate()!;
   const rows = await listReservationsForDay(dateISO, session.staffId);
+  const t2 = performance.now();
+  if (perf) console.log(`[perf:dashboard] listReservationsForDay ${(t2 - t1).toFixed(1)}ms`);
+  if (perf) console.log(`[perf:dashboard] total ${(t2 - t0).toFixed(1)}ms`);
+  return { today, rows };
+}
+
+export default async function DashboardPage() {
+  const { today, rows } = await loadDashboardData();
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 md:px-8 md:py-8">

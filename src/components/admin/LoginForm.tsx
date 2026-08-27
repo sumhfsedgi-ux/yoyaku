@@ -14,18 +14,29 @@ export function LoginForm() {
 
   function handleSubmit(formData: FormData) {
     setError(null);
+    // TEMPORARY (login-perf investigation, see .claude/plans): client-side
+    // timing behind NEXT_PUBLIC_PERF_DEBUG. Never logs email/password.
+    const perf = process.env.NEXT_PUBLIC_PERF_DEBUG === "1";
+    const t0 = perf ? performance.now() : 0;
     startTransition(async () => {
       const result = await signIn("credentials", {
         loginEmail: formData.get("loginEmail"),
         password: formData.get("password"),
         redirect: false,
       });
+      if (perf) console.debug(`[perf:client] signIn resolved ${(performance.now() - t0).toFixed(1)}ms`);
       if (result?.error) {
         setError("メールアドレスまたはパスワードが正しくありません。");
         return;
       }
+      // router.push alone already fetches a fresh RSC payload for /dashboard
+      // when it isn't already in the client Router Cache (the normal case
+      // right after login) - a trailing router.refresh() here duplicated
+      // that fetch (measured: two full (admin) layout + dashboard-page
+      // server renders per login). Confirmed via Playwright that dropping it
+      // does not show stale data across a Staff A -> Staff B re-login.
       router.push("/dashboard");
-      router.refresh();
+      if (perf) console.debug(`[perf:client] push issued ${(performance.now() - t0).toFixed(1)}ms`);
     });
   }
 
