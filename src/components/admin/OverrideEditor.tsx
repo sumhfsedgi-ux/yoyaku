@@ -58,11 +58,12 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
   const [isClosed, setIsClosed] = useState(false);
   const [ranges, setRanges] = useState<Range[]>([]);
   const [existing, setExisting] = useState<OverrideListItem[]>(initialOverrides);
+  const [calendarRefreshToken, setCalendarRefreshToken] = useState(0);
   const [isPending, startTransition] = useTransition();
 
   async function refreshList() {
     const today = DateTime.now().setZone("Asia/Tokyo");
-    const rows = await getMyScheduleOverrides(today.toISODate()!, today.plus({ days: 90 }).toISODate()!);
+    const rows = await getMyScheduleOverrides(today.toISODate()!);
     setExisting(
       rows.map((r) => ({
         dateISO: DateTime.fromJSDate(r.date, { zone: "utc" }).toISODate()!,
@@ -71,6 +72,10 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
         ranges: r.ranges,
       })),
     );
+    // Bumps ScheduleMonthPicker's own "設定あり" dot query too, so a
+    // freshly-saved/deleted date reflects immediately instead of only after
+    // the user flips the displayed month.
+    setCalendarRefreshToken((n) => n + 1);
   }
 
   function handleSave() {
@@ -110,7 +115,7 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
     <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_320px] md:items-start lg:grid-cols-[minmax(420px,480px)_minmax(0,1fr)] lg:items-stretch">
       <section className="md:col-start-1 md:row-start-1">
         <p className="mb-2 text-sm font-medium text-foreground">日付を選択</p>
-        <ScheduleMonthPicker selectedISO={dateISO} onSelect={setDateISO} />
+        <ScheduleMonthPicker selectedISO={dateISO} onSelect={setDateISO} refreshToken={calendarRefreshToken} />
       </section>
 
       {dateISO && (

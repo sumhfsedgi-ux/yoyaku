@@ -4,7 +4,7 @@ import { OverrideEditor, type OverrideListItem } from "@/components/admin/Overri
 
 export default async function ScheduleOverridesPage() {
   const today = DateTime.now().setZone("Asia/Tokyo");
-  const rows = await getMyScheduleOverrides(today.toISODate()!, today.plus({ days: 90 }).toISODate()!);
+  const rows = await getMyScheduleOverrides(today.toISODate()!);
   const initialOverrides: OverrideListItem[] = rows.map((r) => ({
     dateISO: DateTime.fromJSDate(r.date, { zone: "utc" }).toISODate()!,
     isClosed: r.isClosed,

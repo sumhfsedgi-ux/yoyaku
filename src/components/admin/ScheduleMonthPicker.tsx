@@ -13,6 +13,10 @@ const WEEKDAY_JA = ["日", "月", "火", "水", "木", "金", "土"];
 interface ScheduleMonthPickerProps {
   selectedISO: string | null;
   onSelect: (dateISO: string) => void;
+  /** Bump this after an external save/delete so the "設定あり" dots refetch
+   * immediately for the currently displayed month, instead of only updating
+   * the next time the user changes month. */
+  refreshToken?: number;
 }
 
 /**
@@ -25,9 +29,9 @@ interface ScheduleMonthPickerProps {
  *
  * Which dates in the displayed month have an override is fetched with a
  * single ranged query per month change (the same getMyScheduleOverrides
- * action OverrideEditor already uses for its 90-day list), never per cell.
+ * action OverrideEditor already uses for its list), never per cell.
  */
-export function ScheduleMonthPicker({ selectedISO, onSelect }: ScheduleMonthPickerProps) {
+export function ScheduleMonthPicker({ selectedISO, onSelect, refreshToken }: ScheduleMonthPickerProps) {
   const [displayed, setDisplayed] = useState(() =>
     (selectedISO ? DateTime.fromISO(selectedISO) : DateTime.now().setZone("Asia/Tokyo")).startOf("month"),
   );
@@ -50,7 +54,7 @@ export function ScheduleMonthPicker({ selectedISO, onSelect }: ScheduleMonthPick
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayed]);
+  }, [displayed, refreshToken]);
 
   return (
     <div>

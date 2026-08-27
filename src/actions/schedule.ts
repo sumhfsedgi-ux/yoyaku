@@ -48,12 +48,19 @@ export async function setMyWeeklyAvailability(ranges: WeeklyRangeInput[]) {
   ]);
 }
 
-export async function getMyScheduleOverrides(fromDateISO: string, toDateISO: string) {
+/** `toDateISO` omitted means no upper bound - used by the "設定済みの個別日付"
+ * list, which must show every future override regardless of how far out it
+ * is (a fixed window previously capped it, so overrides saved beyond that
+ * window silently never appeared in the list despite saving correctly). */
+export async function getMyScheduleOverrides(fromDateISO: string, toDateISO?: string) {
   const session = await requireStaffSession();
   return prisma.scheduleOverride.findMany({
     where: {
       staffId: session.staffId,
-      date: { gte: new Date(`${fromDateISO}T00:00:00.000Z`), lte: new Date(`${toDateISO}T00:00:00.000Z`) },
+      date: {
+        gte: new Date(`${fromDateISO}T00:00:00.000Z`),
+        ...(toDateISO ? { lte: new Date(`${toDateISO}T00:00:00.000Z`) } : {}),
+      },
     },
     include: { ranges: true },
     orderBy: { date: "asc" },
