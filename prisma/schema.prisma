@@ -1,0 +1,392 @@
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [btree_gist]
+  // NOTE: connection URLs are intentionally NOT declared here. In this Prisma 7 /
+  // driver-adapter setup, the CLI (migrate/studio/db pull) gets its connection from
+  // prisma.config.ts (DIRECT_URL, via @prisma/adapter-pg), and the app's runtime
+  // PrismaClient gets its connection from src/lib/db/prisma.ts (DATABASE_URL, via
+  // @prisma/adapter-neon). Do not add `url`/`directUrl` fields back here.
+  //
+  // IMPORTANT: never run `prisma db push` against this schema. It cannot represent
+  // the EXCLUDE constraint added in the add_reservation_exclude_constraint migration
+  // and could attempt to drop it. Always use `prisma migrate dev` / `migrate deploy`.
+}
+
+enum BookingCutoffType {
+  HOURS_BEFORE
+  DAY_BEFORE_AT_TIME
+}
+
+enum ReservationStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+enum ReservationSource {
+  CUSTOMER_ONLINE
+  STAFF_MANUAL
+}
+
+enum GoogleSyncStatus {
+  PENDING
+  SYNCED
+  FAILED
+  NOT_APPLICABLE
+}
+
+enum CalendarViewMode {
+  DAY
+  MONTH
+}
+
+enum CalendarScope {
+  MINE
+  ROOM
+}
+
+model Room {
+  id           String        @id @default(cuid())
+  name         String
+  active       Boolean       @default(true)
+  createdAt    DateTime      @default(now()) @db.Timestamptz
+  updatedAt    DateTime      @updatedAt @db.Timestamptz
+  reservations Reservation[]
+  roomCalendar RoomCalendar?
+}
+
+/// Room <-> Google CalendarId mapping. The Calendar OAuth connection itself is
+/// salon-wide (GoogleIntegration, id "calendar"), but which calendar a given
+/// room's busy time is checked against is modeled per room so a second room can
+/// be added later by inserting a second row here, without touching the OAuth/
+/// token model at all.
+model RoomCalendar {
+  id               String   @id @default(cuid())
+  roomId           String   @unique
+  room             Room     @relation(fields: [roomId], references: [id])
+  googleCalendarId String
+  active           Boolean  @default(true)
+  updatedAt        DateTime @updatedAt @db.Timestamptz
+}
+
+model Staff {
+  id                 String  @id @default(cuid())
+  displayName        String
+  /// Displayed to customers on this staff member's own /reserve/[slug] page.
+  /// Each staff member has their own salon name - there is no shared/global
+  /// salon setting. Null means unset (page shows nothing, never a placeholder).
+  salonName          String?
+  bookingSlug        String  @unique
+  loginEmail         String  @unique
+  passwordHash       String
+  /// Set on staff creation by whoever provisions the account; cleared once the
+  /// staff member sets their own password via /settings/security.
+  mustChangePassword Boolean @default(true)
+  active             Boolean @default(true)
+
+  bookingCutoffType       BookingCutoffType @default(HOURS_BEFORE)
+  /// Used when bookingCutoffType = HOURS_BEFORE.
+  bookingCutoffHours      Int?
+  /// Used when bookingCutoffType = DAY_BEFORE_AT_TIME (days before the appointment date).
+  bookingCutoffDaysBefore Int?
+  /// Used when bookingCutoffType = DAY_BEFORE_AT_TIME: JST minute-of-day deadline (0-1439).
+  bookingCutoffAtMinute   Int?
+
+  bookingWindowDays Int @default(30)
+
+  /// Per-staff /calendar display preference, persisted so it carries across
+  /// devices (not just localStorage) - see plan for the "自分の予約/部屋全体"
+  /// x "日表示/月表示" toggle. Read as a fallback only when the URL doesn't
+  /// specify view/scope explicitly.
+  calendarView  CalendarViewMode @default(DAY)
+  calendarScope CalendarScope    @default(MINE)
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  weeklyAvailability       WeeklyAvailability[]
+  scheduleOverrides        ScheduleOverride[]
+  staffBlocks              StaffBlock[]
+  customers                Customer[]
+  reservations             Reservation[]             @relation("AssignedStaff")
+  concernMasters           ConcernMaster[]
+  acquisitionSourceMasters AcquisitionSourceMaster[]
+  visitRecords             VisitRecord[]
+  retailSales              RetailSale[]
+}
+
+/// A recurring weekly rule, expressed in minute-of-day (no date/timezone attached).
+/// Multiple rows per (staffId, dayOfWeek) are allowed for split shifts (e.g. 10:00-13:00
+/// and 15:00-19:00 on the same day).
+model WeeklyAvailability {
+  id          String @id @default(cuid())
+  staffId     String
+  staff       Staff  @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  /// 0 = Sunday .. 6 = Saturday
+  dayOfWeek   Int
+  startMinute Int
+  endMinute   Int
+
+  @@index([staffId, dayOfWeek])
+}
+
+/// A specific-date override that replaces (not merges with) that date's weekly rule.
+/// isClosed = true means the whole day is unavailable regardless of `ranges`.
+model ScheduleOverride {
+  id       String                  @id @default(cuid())
+  staffId  String
+  staff    Staff                   @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  date     DateTime                @db.Date
+  isClosed Boolean                 @default(false)
+  ranges   ScheduleOverrideRange[]
+
+  @@unique([staffId, date])
+}
+
+model ScheduleOverrideRange {
+  id                 String           @id @default(cuid())
+  scheduleOverrideId String
+  scheduleOverride   ScheduleOverride @relation(fields: [scheduleOverrideId], references: [id], onDelete: Cascade)
+  startMinute        Int
+  endMinute          Int
+}
+
+/// Ad-hoc "do not book me" windows a staff member sets themselves, distinct from
+/// Google Calendar busy time. Never shown to customers beyond making the slot disappear.
+model StaffBlock {
+  id      String   @id @default(cuid())
+  staffId String
+  staff   Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  startAt DateTime @db.Timestamptz
+  endAt   DateTime @db.Timestamptz
+  reason  String?
+
+  @@index([staffId, startAt, endAt])
+}
+
+/// A customer belongs to exactly one staff (ownerStaffId). The same email under two
+/// different staff produces two independent rows - no cross-staff PII merging.
+model Customer {
+  id           String        @id @default(cuid())
+  ownerStaffId String
+  ownerStaff   Staff         @relation(fields: [ownerStaffId], references: [id])
+  name         String
+  email        String
+  phone        String
+  /// Digits-only derived form of `phone`, kept in sync on every write (see
+  /// normalizePhoneDigits) so search/dedupe can match regardless of hyphen
+  /// formatting without per-query normalization of the stored value.
+  phoneDigits  String
+  createdAt    DateTime      @default(now()) @db.Timestamptz
+  updatedAt    DateTime      @updatedAt @db.Timestamptz
+  reservations Reservation[]
+
+  /// Set once, either automatically from the customer's first VisitRecord or
+  /// manually as a correction from the customer detail page - never re-derived
+  /// or overwritten by a later booking/visit. See VisitRecord.
+  firstVisitDate                DateTime?                @db.Date
+  firstVisitAcquisitionSourceId String?
+  firstVisitAcquisitionSource   AcquisitionSourceMaster? @relation(fields: [firstVisitAcquisitionSourceId], references: [id])
+  visitRecords                  VisitRecord[]
+  retailSales                   RetailSale[]
+
+  @@unique([ownerStaffId, email])
+  @@index([ownerStaffId, firstVisitDate])
+  @@index([ownerStaffId, phoneDigits])
+}
+
+model Reservation {
+  id         String   @id @default(cuid())
+  roomId     String
+  room       Room     @relation(fields: [roomId], references: [id])
+  staffId    String
+  staff      Staff    @relation("AssignedStaff", fields: [staffId], references: [id])
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+
+  /// Always startAt + 90 minutes; stored explicitly for the EXCLUDE constraint and
+  /// for simple range queries without recomputing the duration everywhere.
+  startAt DateTime @db.Timestamptz
+  endAt   DateTime @db.Timestamptz
+
+  status ReservationStatus @default(CONFIRMED)
+  source ReservationSource
+
+  googleEventId    String?
+  googleSyncStatus GoogleSyncStatus @default(NOT_APPLICABLE)
+  googleSyncError  String?
+
+  createdByStaffId       String?
+  cancelledAt            DateTime? @db.Timestamptz
+  cancelledByStaffId     String?
+  rescheduledFromStartAt DateTime? @db.Timestamptz
+
+  /// Contact-info snapshot as of reservation creation time. Selecting an
+  /// existing customer never mutates the Customer master row, so this is the
+  /// only record of "what was true when this reservation was made" for that
+  /// path. Null on reservations created before this column existed, and the
+  /// display layer falls back to the live `customer` relation in that case.
+  customerNameSnapshot  String?
+  customerEmailSnapshot String?
+  customerPhoneSnapshot String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  visitRecord VisitRecord?
+
+  @@index([roomId, startAt, endAt])
+  @@index([staffId, startAt])
+  @@index([customerId])
+}
+
+model ConcernMaster {
+  id           String        @id @default(cuid())
+  staffId      String
+  staff        Staff         @relation(fields: [staffId], references: [id])
+  name         String
+  sortOrder    Int           @default(0)
+  active       Boolean       @default(true)
+  createdAt    DateTime      @default(now()) @db.Timestamptz
+  updatedAt    DateTime      @updatedAt @db.Timestamptz
+  visitRecords VisitRecord[]
+
+  @@unique([staffId, name])
+  @@index([staffId, sortOrder])
+}
+
+/// A first-visit source (Threads/Instagram/referral/etc), staff-managed. Never
+/// physically deleted (active=false only) - see plan §4 for why: hiding an
+/// item must not break a Customer row or past analytics still referencing it.
+model AcquisitionSourceMaster {
+  id        String     @id @default(cuid())
+  staffId   String
+  staff     Staff      @relation(fields: [staffId], references: [id])
+  name      String
+  sortOrder Int        @default(0)
+  active    Boolean    @default(true)
+  createdAt DateTime   @default(now()) @db.Timestamptz
+  updatedAt DateTime   @updatedAt @db.Timestamptz
+  customers Customer[]
+
+  @@unique([staffId, name])
+  @@index([staffId, sortOrder])
+}
+
+/// One row per visit. Deliberately separate from Reservation (a reservation
+/// is a booked slot; a VisitRecord is the chart entry for what actually
+/// happened) so Reservation isn't bloated with chart-only fields, and so a
+/// walk-in visit with no matching reservation can still be recorded.
+/// reservationId is filled only when a matching reservation exists.
+/// amount is the ACTUAL amount received that day (not the menu list price) -
+/// always Int yen, never a float. Physical deletion is intentionally not
+/// supported in Phase 1 (see plan §5): this table is the source of truth for
+/// revenue/visit-count/acquisition/concern analytics, so mistakes are
+/// corrected via update, not delete.
+model VisitRecord {
+  id                 String          @id @default(cuid())
+  staffId            String
+  staff              Staff           @relation(fields: [staffId], references: [id])
+  customerId         String
+  customer           Customer        @relation(fields: [customerId], references: [id])
+  reservationId      String?         @unique
+  reservation        Reservation?    @relation(fields: [reservationId], references: [id])
+  visitDate          DateTime        @db.Date
+  amount             Int
+  concerns           ConcernMaster[]
+  concernDetail      String?
+  customerImpression String?
+  staffComment       String?
+  nextVisitMemo      String?
+  createdAt          DateTime        @default(now()) @db.Timestamptz
+  updatedAt          DateTime        @updatedAt @db.Timestamptz
+
+  @@index([staffId, visitDate])
+  @@index([customerId, visitDate])
+}
+
+enum RetailSaleStatus {
+  COMPLETED
+  CANCELLED
+}
+
+/// One retail (物販) checkout - deliberately separate from VisitRecord, since
+/// a retail sale can happen with no visit/booking attached (a walk-in
+/// purchase). No product master: product names are free text, stored as
+/// typed at sale time on RetailSaleItem. customerId is nullable for an
+/// unregistered buyer ("顧客登録なし") - see plan.
+model RetailSale {
+  id          String           @id @default(cuid())
+  staffId     String
+  staff       Staff            @relation(fields: [staffId], references: [id])
+  customerId  String?
+  customer    Customer?        @relation(fields: [customerId], references: [id])
+  soldAt      DateTime         @db.Date
+  totalAmount Int
+  memo        String?
+  status      RetailSaleStatus @default(COMPLETED)
+
+  cancelledAt        DateTime? @db.Timestamptz
+  cancelledByStaffId String?
+
+  createdAt DateTime         @default(now()) @db.Timestamptz
+  updatedAt DateTime         @updatedAt @db.Timestamptz
+  items     RetailSaleItem[]
+
+  @@index([staffId, soldAt])
+  @@index([soldAt])
+  @@index([customerId])
+}
+
+/// A product line within one RetailSale. No price per line - the checkout's
+/// total is entered once on RetailSale.totalAmount and is never apportioned
+/// across items (see plan §3/§7).
+model RetailSaleItem {
+  id           String     @id @default(cuid())
+  retailSaleId String
+  retailSale   RetailSale @relation(fields: [retailSaleId], references: [id], onDelete: Cascade)
+  productName  String
+  quantity     Int
+  createdAt    DateTime   @default(now()) @db.Timestamptz
+  updatedAt    DateTime   @updatedAt @db.Timestamptz
+
+  @@index([retailSaleId])
+}
+
+/// Salon-wide Google OAuth connection, split into independent per-purpose rows
+/// (id "calendar" / id "gmail" - see GoogleIntegrationPurpose in
+/// src/lib/google/oauthClient.ts). NOT per-staff. Table kept as
+/// GoogleCalendarIntegration via @@map to avoid a physical rename - only the
+/// Prisma model identifier changes, which better reflects that this table also
+/// holds the Gmail-sending connection now, not just Calendar. The refresh token
+/// is AES-256-GCM encrypted before being stored here; the encryption key lives
+/// only in the deployment environment's env vars, never in this database.
+model GoogleIntegration {
+  id                    String   @id
+  googleAccountEmail    String?
+  refreshTokenEncrypted String
+  scope                 String
+  connectedByStaffId    String?
+  connectedAt           DateTime @default(now()) @db.Timestamptz
+  updatedAt             DateTime @updatedAt @db.Timestamptz
+
+  @@map("GoogleCalendarIntegration")
+}
+
+/// DB-backed fixed-window rate limiting for public endpoints. Required because
+/// Vercel's serverless functions don't share process memory across invocations,
+/// so an in-memory limiter would not work in production.
+model RateLimitHit {
+  id          String   @id @default(cuid())
+  key         String
+  windowStart DateTime @db.Timestamptz
+  count       Int      @default(1)
+
+  @@unique([key, windowStart])
+  @@index([key])
+}
