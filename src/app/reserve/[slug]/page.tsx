@@ -1,9 +1,41 @@
+import { cache } from "react";
 import { notFound } from "next/navigation";
+import type { Metadata } from "next";
 import { DateTime } from "luxon";
 import { prisma } from "@/lib/db/prisma";
 import { BookingFlow } from "@/components/reserve/BookingFlow";
 import { getAvailableSlotRangeStatus } from "@/actions/availability";
 import { SALON_TIME_ZONE } from "@/lib/availability/types";
+
+/**
+ * Shared with generateMetadata below via React's cache() so both resolve to
+ * the same in-flight/resolved query within one request instead of hitting
+ * Prisma twice - same technique as resolvePrimaryRoomId/getStaffSession.
+ */
+const getStaffForReserve = cache((slug: string) =>
+  prisma.staff.findUnique({
+    where: { bookingSlug: slug },
+    select: { bookingSlug: true, bookingWindowDays: true, active: true, salonName: true },
+  }),
+);
+
+/**
+ * A link to this page is what staff actually send customers (LINE, SMS,
+ * etc.) - without this, every staff member's booking link previewed with the
+ * same generic app-wide title/description from the root layout, giving the
+ * customer no way to tell which salon/staff the link was for.
+ */
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params;
+  const staff = await getStaffForReserve(slug);
+  if (!staff || !staff.active || !staff.salonName) {
+    return {};
+  }
+  return {
+    title: `${staff.salonName} - ご予約`,
+    description: `${staff.salonName}のご予約はこちらから`,
+  };
+}
 
 export default async function ReservePage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -14,13 +46,7 @@ export default async function ReservePage({ params }: { params: Promise<{ slug: 
   // Precomputing the FIRST 2-week window here means BookingFlow's initial
   // paint already has real ○/× data - no client fetch-on-mount round trip
   // (paging to a later window is still a client fetch, see BookingFlow.tsx).
-  const [staff, initialGrid] = await Promise.all([
-    prisma.staff.findUnique({
-      where: { bookingSlug: slug },
-      select: { bookingSlug: true, bookingWindowDays: true, active: true, salonName: true },
-    }),
-    getAvailableSlotRangeStatus(slug, todayISO),
-  ]);
+  const [staff, initialGrid] = await Promise.all([getStaffForReserve(slug), getAvailableSlotRangeStatus(slug, todayISO)]);
 
   if (!staff || !staff.active) notFound();
 
