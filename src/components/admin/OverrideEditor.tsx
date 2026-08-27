@@ -61,6 +61,24 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
   const [calendarRefreshToken, setCalendarRefreshToken] = useState(0);
   const [isPending, startTransition] = useTransition();
 
+  /**
+   * Selecting a date that already has a saved override must pre-fill the
+   * form with its real isClosed/ranges - previously the form always opened
+   * blank regardless, so re-opening a just-saved date looked like the save
+   * hadn't happened even though the list below it was correct.
+   */
+  function handleSelectDate(newDateISO: string) {
+    setDateISO(newDateISO);
+    const found = existing.find((e) => e.dateISO === newDateISO);
+    if (found) {
+      setIsClosed(found.isClosed);
+      setRanges(found.ranges.map((r) => ({ key: nextKey(), startMinute: r.startMinute, endMinute: r.endMinute })));
+    } else {
+      setIsClosed(false);
+      setRanges([]);
+    }
+  }
+
   async function refreshList() {
     const today = DateTime.now().setZone("Asia/Tokyo");
     const rows = await getMyScheduleOverrides(today.toISODate()!);
@@ -78,8 +96,10 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
     setCalendarRefreshToken((n) => n + 1);
   }
 
+  const canSave = isClosed || ranges.length > 0;
+
   function handleSave() {
-    if (!dateISO) return;
+    if (!dateISO || !canSave) return;
     startTransition(async () => {
       try {
         await upsertMyScheduleOverride({
@@ -115,7 +135,7 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
     <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_320px] md:items-start lg:grid-cols-[minmax(420px,480px)_minmax(0,1fr)] lg:items-stretch">
       <section className="md:col-start-1 md:row-start-1">
         <p className="mb-2 text-sm font-medium text-foreground">日付を選択</p>
-        <ScheduleMonthPicker selectedISO={dateISO} onSelect={setDateISO} refreshToken={calendarRefreshToken} />
+        <ScheduleMonthPicker selectedISO={dateISO} onSelect={handleSelectDate} refreshToken={calendarRefreshToken} />
       </section>
 
       {dateISO && (
@@ -178,7 +198,9 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
             </div>
           )}
 
-          <Button size="touch" disabled={isPending} onClick={handleSave} className="mt-4 w-full">
+          {!canSave && <p className="mt-3 text-xs text-muted-foreground">時間帯を追加するか、終日休みにチェックしてください。</p>}
+
+          <Button size="touch" disabled={!canSave || isPending} onClick={handleSave} className="mt-4 w-full">
             {isPending ? "保存中..." : "保存する"}
           </Button>
         </section>

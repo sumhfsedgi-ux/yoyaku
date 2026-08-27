@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/db/prisma";
 import { requireStaffSession } from "@/lib/auth/session";
-import { bookingCutoffSchema, weeklyAvailabilityRangeSchema } from "@/lib/validation/schemas";
+import { bookingCutoffSchema, upsertScheduleOverrideInputSchema, weeklyAvailabilityRangeSchema } from "@/lib/validation/schemas";
 import type { z } from "zod";
 
 /**
@@ -75,7 +75,7 @@ export interface UpsertScheduleOverrideInput {
 
 export async function upsertMyScheduleOverride(input: UpsertScheduleOverrideInput) {
   const session = await requireStaffSession();
-  const ranges = input.ranges.map((r) => weeklyAvailabilityRangeSchema.parse(r));
+  const { isClosed, ranges } = upsertScheduleOverrideInputSchema.parse({ isClosed: input.isClosed, ranges: input.ranges });
   const date = new Date(`${input.dateISO}T00:00:00.000Z`);
 
   const existing = await prisma.scheduleOverride.findUnique({
@@ -88,8 +88,8 @@ export async function upsertMyScheduleOverride(input: UpsertScheduleOverrideInpu
       prisma.scheduleOverride.update({
         where: { id: existing.id },
         data: {
-          isClosed: input.isClosed,
-          ranges: input.isClosed ? undefined : { create: ranges },
+          isClosed,
+          ranges: isClosed ? undefined : { create: ranges },
         },
       }),
     ]);
@@ -98,8 +98,8 @@ export async function upsertMyScheduleOverride(input: UpsertScheduleOverrideInpu
       data: {
         staffId: session.staffId,
         date,
-        isClosed: input.isClosed,
-        ranges: input.isClosed ? undefined : { create: ranges },
+        isClosed,
+        ranges: isClosed ? undefined : { create: ranges },
       },
     });
   }

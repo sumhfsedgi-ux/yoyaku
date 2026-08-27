@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createVisitRecordInputSchema, updateMySalonNameInputSchema, VISIT_AMOUNT_MAX_YEN } from "@/lib/validation/schemas";
+import {
+  createVisitRecordInputSchema,
+  updateMySalonNameInputSchema,
+  upsertScheduleOverrideInputSchema,
+  VISIT_AMOUNT_MAX_YEN,
+} from "@/lib/validation/schemas";
 
 describe("updateMySalonNameInputSchema", () => {
   it("accepts a normal salon name and trims surrounding whitespace", () => {
@@ -57,5 +62,36 @@ describe("createVisitRecordInputSchema amount validation (spec scenario 14)", ()
   it("defaults concernIds to an empty array when omitted", () => {
     const result = createVisitRecordInputSchema.parse({ ...base, amount: 1000 });
     expect(result.concernIds).toEqual([]);
+  });
+});
+
+describe("upsertScheduleOverrideInputSchema", () => {
+  it("rejects isClosed=false with no ranges (nothing entered, would silently save a day with no bookable time)", () => {
+    expect(() => upsertScheduleOverrideInputSchema.parse({ isClosed: false, ranges: [] })).toThrow();
+  });
+
+  it("accepts isClosed=true with no ranges", () => {
+    const result = upsertScheduleOverrideInputSchema.parse({ isClosed: true, ranges: [] });
+    expect(result.ranges).toEqual([]);
+  });
+
+  it("accepts isClosed=false with at least one range", () => {
+    const result = upsertScheduleOverrideInputSchema.parse({
+      isClosed: false,
+      ranges: [{ startMinute: 10 * 60, endMinute: 12 * 60 }],
+    });
+    expect(result.ranges).toHaveLength(1);
+  });
+
+  it("rejects overlapping ranges", () => {
+    expect(() =>
+      upsertScheduleOverrideInputSchema.parse({
+        isClosed: false,
+        ranges: [
+          { startMinute: 10 * 60, endMinute: 13 * 60 },
+          { startMinute: 12 * 60, endMinute: 15 * 60 },
+        ],
+      }),
+    ).toThrow();
   });
 });

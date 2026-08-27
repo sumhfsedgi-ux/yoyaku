@@ -6,6 +6,7 @@ import { listMyAcquisitionSources, listMyConcernMasters } from "@/actions/master
 import { ForbiddenError } from "@/lib/auth/authorization";
 import { dateToJst, formatRangeForStaff } from "@/lib/time/tz";
 import { Badge } from "@/components/ui/badge";
+import { BackButton } from "@/components/admin/BackButton";
 import { CancelReservationButton } from "@/components/admin/CancelReservationButton";
 import { RescheduleReservationDialog } from "@/components/admin/RescheduleReservationDialog";
 import { RecordVisitButton } from "@/components/admin/RecordVisitButton";
@@ -44,8 +45,9 @@ export default async function ReservationDetailPage({ params }: { params: Promis
   const syncStatus = SYNC_STATUS_LABEL[detail.googleSyncStatus] ?? SYNC_STATUS_LABEL.NOT_APPLICABLE;
 
   return (
-    <div className="mx-auto max-w-xl px-4 py-6 md:px-8 md:py-8">
-      <h1 className="mb-1 text-xl font-semibold tracking-tight text-foreground">予約詳細</h1>
+    <div className="mx-auto flex max-w-xl flex-col px-4 py-6 md:px-8 md:py-8">
+      <BackButton />
+      <h1 className="mb-1 mt-4 text-xl font-semibold tracking-tight text-foreground">予約詳細</h1>
       <p className="mb-6 text-sm text-muted-foreground">{formatRangeForStaff(detail.startAt, detail.endAt)}</p>
 
       <div className="mb-6 flex flex-wrap gap-2">

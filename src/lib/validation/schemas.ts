@@ -57,6 +57,29 @@ export const weeklyAvailabilityRangeSchema = z
   })
   .refine((r) => r.endMinute > r.startMinute, { message: "終了時刻は開始時刻より後にしてください" });
 
+/**
+ * Validates a set of ranges that all belong to the same day (a single
+ * ScheduleOverride date, or one weekday of WeeklyAvailability) don't overlap
+ * each other. Half-open intervals, matching lib/availability/rules.ts's
+ * intervalsOverlap - two ranges that merely touch (aEnd === bStart) are not
+ * considered overlapping.
+ */
+export const nonOverlappingRangesSchema = z.array(weeklyAvailabilityRangeSchema).refine(
+  (ranges) => ranges.every((a, i) => ranges.every((b, j) => i === j || a.startMinute >= b.endMinute || a.endMinute <= b.startMinute)),
+  { message: "時間帯が重複しています" },
+);
+
+/** isClosed=false with zero ranges would silently save a day with no bookable time slots. */
+export const upsertScheduleOverrideInputSchema = z
+  .object({
+    isClosed: z.boolean(),
+    ranges: nonOverlappingRangesSchema,
+  })
+  .refine((v) => v.isClosed || v.ranges.length > 0, {
+    message: "時間帯を1つ以上追加するか、終日休みにしてください",
+    path: ["ranges"],
+  });
+
 export const bookingCutoffSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("HOURS_BEFORE"), hours: z.number().int().min(0).max(24 * 30) }),
   z.object({

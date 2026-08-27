@@ -289,6 +289,56 @@ describe("validateSlotBookable", () => {
     );
     expect(result).toEqual({ ok: false, reason: "OUT_OF_WINDOW" });
   });
+
+  // Weekly config with Thursday (dayOfWeek=4) closed, used by the two tests
+  // below - regression coverage for a report where a staff member set
+  // Thursday to 休み but customer/manual-reservation screens still showed
+  // Thursdays as bookable.
+  const THURSDAY_CLOSED_WEEKLY: StaffAvailabilityConfig["weekly"] = [
+    { dayOfWeek: 0, ranges: [] },
+    { dayOfWeek: 1, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+    { dayOfWeek: 2, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+    { dayOfWeek: 3, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+    { dayOfWeek: 4, ranges: [] },
+    { dayOfWeek: 5, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+    { dayOfWeek: 6, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+  ];
+
+  it("a forged request for a normally-closed weekday (Thursday, empty weekly ranges) is rejected as OUT_OF_HOURS, even with no room/calendar conflicts", async () => {
+    const world: FakeWorld = {
+      configs: new Map([[STAFF_A, baseConfig(STAFF_A, { weekly: THURSDAY_CLOSED_WEEKLY })]]),
+      roomReservations: [],
+      calendarBusy: [],
+    };
+    // 2026-09-03 is a Thursday, would be a perfectly normal 10:00 slot if the
+    // day were open - a UI bypass (forged/direct Server Action call) must
+    // still be rejected by the same rules the ○/× grid uses, not just hidden
+    // from the picker.
+    const startAtUtcIso = DateTime.fromISO("2026-09-03T10:00", { zone: SALON_TIME_ZONE }).toUTC().toISO()!;
+    const result = await validateSlotBookable({ staffId: STAFF_A, startAtUtcIso, now: NOW }, makeDeps(world));
+    expect(result).toEqual({ ok: false, reason: "OUT_OF_HOURS" });
+  });
+
+  it("an override reopening a normally-closed weekday makes a direct request for that exact date succeed (override takes precedence)", async () => {
+    const world: FakeWorld = {
+      configs: new Map([
+        [
+          STAFF_A,
+          baseConfig(STAFF_A, {
+            weekly: THURSDAY_CLOSED_WEEKLY,
+            overridesByDate: new Map([
+              ["2026-09-03", { date: "2026-09-03", isClosed: false, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] }],
+            ]),
+          }),
+        ],
+      ]),
+      roomReservations: [],
+      calendarBusy: [],
+    };
+    const startAtUtcIso = DateTime.fromISO("2026-09-03T10:00", { zone: SALON_TIME_ZONE }).toUTC().toISO()!;
+    const result = await validateSlotBookable({ staffId: STAFF_A, startAtUtcIso, now: NOW }, makeDeps(world));
+    expect(result).toEqual({ ok: true });
+  });
 });
 
 describe("computeAvailabilityForRange", () => {
@@ -493,6 +543,102 @@ describe("computeAvailabilityForRange", () => {
       const singleDayResult = await computeAvailableSlots({ staffId: STAFF_A, dateISO: day.dateISO, now: NOW }, deps);
       const expectedAvailable = singleDayResult.ok && singleDayResult.slots.length > 0;
       expect(day.available, day.dateISO).toBe(expectedAvailable);
+    }
+  });
+
+  it("a normally-closed weekday (Thursday, dayOfWeek=4 with empty ranges) is × across the whole window, matching the reported repro date", async () => {
+    const thursdayClosedWeekly: StaffAvailabilityConfig["weekly"] = [
+      { dayOfWeek: 0, ranges: [] },
+      { dayOfWeek: 1, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+      { dayOfWeek: 2, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+      { dayOfWeek: 3, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+      { dayOfWeek: 4, ranges: [] },
+      { dayOfWeek: 5, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+      { dayOfWeek: 6, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+    ];
+    const world: FakeWorld = {
+      configs: new Map([[STAFF_A, baseConfig(STAFF_A, { weekly: thursdayClosedWeekly })]]),
+      roomReservations: [],
+      calendarBusy: [],
+    };
+    const result = await computeAvailabilityForRange(
+      { staffId: STAFF_A, startDateISO: RANGE_START, endDateISO: RANGE_END, now: NOW },
+      makeDeps(world),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // 2026-08-27 and 2026-09-03 are both Thursdays within the 14-day window.
+    expect(result.days.find((d) => d.dateISO === "2026-08-27")?.available).toBe(false);
+    expect(result.days.find((d) => d.dateISO === "2026-09-03")?.available).toBe(false);
+    // Neighboring open weekdays are unaffected.
+    expect(result.days.find((d) => d.dateISO === "2026-08-26")?.available).toBe(true);
+    expect(result.days.find((d) => d.dateISO === "2026-08-28")?.available).toBe(true);
+  });
+
+  it("a per-date override REOPENS an otherwise weekly-closed weekday (Thursday) for only that date - other closed Thursdays in the window stay ×", async () => {
+    const reopenedDay = "2026-09-03"; // Thursday, normally closed in this fixture
+    const thursdayClosedWeekly: StaffAvailabilityConfig["weekly"] = [
+      { dayOfWeek: 0, ranges: [] },
+      { dayOfWeek: 1, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+      { dayOfWeek: 2, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+      { dayOfWeek: 3, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+      { dayOfWeek: 4, ranges: [] },
+      { dayOfWeek: 5, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+      { dayOfWeek: 6, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+    ];
+    const world: FakeWorld = {
+      configs: new Map([
+        [
+          STAFF_A,
+          baseConfig(STAFF_A, {
+            weekly: thursdayClosedWeekly,
+            overridesByDate: new Map([
+              [reopenedDay, { date: reopenedDay, isClosed: false, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] }],
+            ]),
+          }),
+        ],
+      ]),
+      roomReservations: [],
+      calendarBusy: [],
+    };
+    const result = await computeAvailabilityForRange(
+      { staffId: STAFF_A, startDateISO: RANGE_START, endDateISO: RANGE_END, now: NOW },
+      makeDeps(world),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.days.find((d) => d.dateISO === reopenedDay)?.available).toBe(true);
+    expect(result.days.find((d) => d.dateISO === "2026-08-27")?.available).toBe(false);
+  });
+
+  it("every weekday-of-week offset (0=Sun..6=Sat) lines up with the calendar date it's meant to represent - only Thursday open, every day in the window checked", async () => {
+    const onlyThursdayWeekly: StaffAvailabilityConfig["weekly"] = [
+      { dayOfWeek: 0, ranges: [] },
+      { dayOfWeek: 1, ranges: [] },
+      { dayOfWeek: 2, ranges: [] },
+      { dayOfWeek: 3, ranges: [] },
+      { dayOfWeek: 4, ranges: [{ startMinute: 10 * 60, endMinute: 19 * 60 }] },
+      { dayOfWeek: 5, ranges: [] },
+      { dayOfWeek: 6, ranges: [] },
+    ];
+    const world: FakeWorld = {
+      configs: new Map([[STAFF_A, baseConfig(STAFF_A, { weekly: onlyThursdayWeekly })]]),
+      roomReservations: [],
+      calendarBusy: [],
+    };
+    const result = await computeAvailabilityForRange(
+      { staffId: STAFF_A, startDateISO: RANGE_START, endDateISO: RANGE_END, now: NOW },
+      makeDeps(world),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.days).toHaveLength(14);
+    for (const day of result.days) {
+      // Luxon's own .weekday is 1=Monday..7=Sunday, so Thursday is 4 there too
+      // - this assertion is intentionally independent of this codebase's
+      // toWeekday() helper, so a bug in that helper can't hide from this test.
+      const isThursday = DateTime.fromISO(day.dateISO, { zone: SALON_TIME_ZONE }).weekday === 4;
+      expect(day.available, day.dateISO).toBe(isThursday);
     }
   });
 });
