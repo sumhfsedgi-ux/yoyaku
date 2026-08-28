@@ -16,6 +16,27 @@ function jst(iso: string): Date {
   return DateTime.fromISO(iso, { zone: SALON_TIME_ZONE }).toJSDate();
 }
 
+function slotAt(dateISO: string, time: string): string {
+  return DateTime.fromISO(`${dateISO}T${time}`, { zone: SALON_TIME_ZONE }).toUTC().toISO()!;
+}
+
+/**
+ * 08:00-19:00 every weekday - wider than baseConfig's default 10:00-19:00 so
+ * boundary tests around a Google-busy 10:00-15:00 window (a real production
+ * bug report: an event registered directly in Google Calendar wasn't
+ * blocking overlapping slots) can exercise 90-minute candidates that start
+ * before the busy window opens (e.g. 08:30, 08:45).
+ */
+const WIDE_HOURS_WEEKLY: StaffAvailabilityConfig["weekly"] = [
+  { dayOfWeek: 0, ranges: [] },
+  { dayOfWeek: 1, ranges: [{ startMinute: 8 * 60, endMinute: 19 * 60 }] },
+  { dayOfWeek: 2, ranges: [{ startMinute: 8 * 60, endMinute: 19 * 60 }] },
+  { dayOfWeek: 3, ranges: [{ startMinute: 8 * 60, endMinute: 19 * 60 }] },
+  { dayOfWeek: 4, ranges: [{ startMinute: 8 * 60, endMinute: 19 * 60 }] },
+  { dayOfWeek: 5, ranges: [{ startMinute: 8 * 60, endMinute: 19 * 60 }] },
+  { dayOfWeek: 6, ranges: [] },
+];
+
 function baseConfig(staffId: string, overrides: Partial<StaffAvailabilityConfig> = {}): StaffAvailabilityConfig {
   return {
     staffId,
@@ -167,6 +188,30 @@ describe("computeAvailableSlots", () => {
     const nearOwnSlot = DateTime.fromISO(`${MONDAY}T13:15`, { zone: SALON_TIME_ZONE }).toUTC().toISO();
     expect(result.slots).toContain(nearOwnSlot);
   });
+
+  it("regression: a Google Calendar busy 10:00-15:00 excludes every 90-minute candidate overlapping it, and only those", async () => {
+    // Real production bug report: an event registered directly in Google
+    // Calendar (not through this app) failed to block the corresponding
+    // slots in the customer-facing available-times list.
+    const world: FakeWorld = {
+      configs: new Map([[STAFF_A, baseConfig(STAFF_A, { weekly: WIDE_HOURS_WEEKLY })]]),
+      roomReservations: [],
+      calendarBusy: [{ start: jst(`${MONDAY}T10:00`), end: jst(`${MONDAY}T15:00`) }],
+    };
+    const result = await computeAvailableSlots({ staffId: STAFF_A, dateISO: MONDAY, now: NOW }, makeDeps(world));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // 08:30-10:00 only touches the busy window's start - not an overlap.
+    expect(result.slots).toContain(slotAt(MONDAY, "08:30"));
+    // 08:45-10:15 through 13:15-14:45 all overlap 10:00-15:00 - excluded.
+    expect(result.slots).not.toContain(slotAt(MONDAY, "08:45"));
+    expect(result.slots).not.toContain(slotAt(MONDAY, "10:00"));
+    expect(result.slots).not.toContain(slotAt(MONDAY, "12:00"));
+    expect(result.slots).not.toContain(slotAt(MONDAY, "14:45"));
+    // 15:00-16:30 only touches the busy window's end - not an overlap.
+    expect(result.slots).toContain(slotAt(MONDAY, "15:00"));
+  });
 });
 
 describe("validateSlotBookable", () => {
@@ -230,6 +275,30 @@ describe("validateSlotBookable", () => {
     );
     expect(result).toEqual({ ok: false, reason: "CALENDAR_BUSY" });
   });
+
+  it.each([
+    ["08:30", true],
+    ["08:45", false],
+    ["10:00", false],
+    ["12:00", false],
+    ["14:45", false],
+    ["15:00", true],
+  ] as const)(
+    "regression: Google busy 10:00-15:00, direct request for %s is %s",
+    async (time, expectOk) => {
+      const world: FakeWorld = {
+        configs: new Map([[STAFF_A, baseConfig(STAFF_A, { weekly: WIDE_HOURS_WEEKLY })]]),
+        roomReservations: [],
+        calendarBusy: [{ start: jst(`${MONDAY}T10:00`), end: jst(`${MONDAY}T15:00`) }],
+      };
+      const result = await validateSlotBookable(
+        { staffId: STAFF_A, startAtUtcIso: slotAt(MONDAY, time), now: NOW },
+        makeDeps(world),
+      );
+      expect(result.ok).toBe(expectOk);
+      if (!expectOk) expect((result as { reason: string }).reason).toBe("CALENDAR_BUSY");
+    },
+  );
 
   it("a fully clear slot validates ok", async () => {
     const world: FakeWorld = {
@@ -402,6 +471,27 @@ describe("computeAvailabilityForRange", () => {
     expect(result.days.find((d) => d.dateISO === bookedDay)?.available).toBe(false);
     expect(result.days.find((d) => d.dateISO === "2026-08-26")?.available).toBe(true);
     expect(result.days.find((d) => d.dateISO === "2026-08-28")?.available).toBe(true);
+  });
+
+  it("regression: a Google Calendar busy 10:00-15:00 (not the whole day) still leaves the day ○, since 15:00+ remains bookable", async () => {
+    // Per the bug report's own spec: the ○/× day grid is allowed to still
+    // show ○ here (a bookable slot genuinely exists after the busy window) -
+    // the bug is specifically about the single-day time list still offering
+    // the overlapping start times, covered by the computeAvailableSlots and
+    // validateSlotBookable regression tests above.
+    const busyDay = "2026-08-26"; // Wednesday, within the range
+    const world: FakeWorld = {
+      configs: new Map([[STAFF_A, baseConfig(STAFF_A, { weekly: WIDE_HOURS_WEEKLY })]]),
+      roomReservations: [],
+      calendarBusy: [{ start: jst(`${busyDay}T10:00`), end: jst(`${busyDay}T15:00`) }],
+    };
+    const result = await computeAvailabilityForRange(
+      { staffId: STAFF_A, startDateISO: RANGE_START, endDateISO: RANGE_END, now: NOW },
+      makeDeps(world),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.days.find((d) => d.dateISO === busyDay)?.available).toBe(true);
   });
 
   it("a Google Calendar check failure for the whole range returns CALENDAR_UNAVAILABLE, not 14 silent ×s", async () => {

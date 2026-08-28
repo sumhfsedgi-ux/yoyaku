@@ -5,16 +5,20 @@ import type { GmailService, SendEmailInput } from "./port";
 
 const NOT_CONFIGURED = "GOOGLE_NOT_CONFIGURED";
 
+/** Display name shown as the sender in the customer's/staff's inbox (Gmail otherwise falls back to the mailbox's local-part). */
+const FROM_DISPLAY_NAME = "腸もみサロン";
+
 function describeError(err: unknown): string {
   if (err && typeof err === "object" && "message" in err) return String((err as { message: unknown }).message);
   return String(err);
 }
 
-async function buildRawMessage(from: string, input: SendEmailInput): Promise<string> {
+async function buildRawMessage(fromAddress: string, input: SendEmailInput): Promise<string> {
   // nodemailer's MailComposer is used purely to build a correct RFC 2822 MIME
   // message - no SMTP transport is involved anywhere in this codebase. The
   // resulting buffer is base64url-encoded and handed to the Gmail API's own
   // send endpoint instead.
+  const from = fromAddress === "me" ? fromAddress : { name: FROM_DISPLAY_NAME, address: fromAddress };
   const composer = new MailComposer({
     from,
     to: input.to,

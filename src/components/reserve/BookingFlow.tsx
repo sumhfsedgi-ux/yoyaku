@@ -179,6 +179,10 @@ export function BookingFlow({
     );
   }
 
+  const selectedSlotLabel = selectedSlot
+    ? `${DateTime.fromISO(selectedSlot, { zone: "utc" }).setZone("Asia/Tokyo").setLocale("ja").toFormat("M月d日 (ccc) HH:mm")}〜`
+    : null;
+
   return (
     <div>
       <StepProgress currentStep={step} />
@@ -227,6 +231,11 @@ export function BookingFlow({
         <div className="flex flex-col gap-4">
           <BackButton onClick={() => setStep(1)} />
           <h2 className="text-base font-semibold text-foreground">お客様情報をご入力ください</h2>
+          {selectedSlotLabel && (
+            <p className="-mt-2 text-sm text-muted-foreground">
+              選択した日時: <span className="font-medium text-foreground">{selectedSlotLabel}</span>
+            </p>
+          )}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="c-name">お名前</Label>
             <Input id="c-name" value={name} onChange={(e) => setName(e.target.value)} className="h-11 text-base" />
@@ -263,7 +272,7 @@ export function BookingFlow({
           <h2 className="text-base font-semibold text-foreground">予約内容のご確認</h2>
           <div className="rounded-xl border border-border bg-card p-4">
             <dl className="flex flex-col gap-2 text-sm">
-              <Row label="日時" value={`${DateTime.fromISO(selectedSlot, { zone: "utc" }).setZone("Asia/Tokyo").setLocale("ja").toFormat("M月d日 (ccc) HH:mm")}〜`} />
+              <Row label="日時" value={selectedSlotLabel!} />
               <Row label="お名前" value={name} />
               <Row label="メールアドレス" value={email} />
               <Row label="電話番号" value={phone} />

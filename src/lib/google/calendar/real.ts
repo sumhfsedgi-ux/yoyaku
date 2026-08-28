@@ -18,6 +18,15 @@ function describeError(err: unknown): string {
   return String(err);
 }
 
+/** Masks all but the last 4 characters, so a debug log doesn't leak a full private calendarId. */
+function maskCalendarId(calendarId: string): string {
+  return calendarId.length <= 4 ? calendarId : `${"*".repeat(calendarId.length - 4)}${calendarId.slice(-4)}`;
+}
+
+function describeFreeBusyErrors(errors: calendar_v3.Schema$Error[]): string {
+  return errors.map((e) => e.reason ?? e.domain ?? "unknown").join(", ");
+}
+
 /**
  * Real Google Calendar integration, backed by the salon's Calendar-purpose
  * Google account (independent from the Gmail-purpose account - see
@@ -38,21 +47,39 @@ export class RealCalendarService implements CalendarService {
     if (!auth) return { ok: false, error: NOT_CONFIGURED };
 
     try {
-      const calendar = google.calendar({ version: "v3", auth });
-      const res = await calendar.freebusy.query({
-        requestBody: {
-          timeMin: rangeStart.toISOString(),
-          timeMax: rangeEnd.toISOString(),
-          items: [{ id: calendarId }],
-        },
+      const timeMin = rangeStart.toISOString();
+      const timeMax = rangeEnd.toISOString();
+      const res = await google.calendar({ version: "v3", auth }).freebusy.query({
+        requestBody: { timeMin, timeMax, items: [{ id: calendarId }] },
       });
-      const busy = res.data.calendars?.[calendarId]?.busy ?? [];
-      return {
-        ok: true,
-        busy: busy
-          .filter((b): b is { start: string; end: string } => Boolean(b.start && b.end))
-          .map((b) => ({ start: new Date(b.start), end: new Date(b.end) })),
-      };
+      const calendarResult = res.data.calendars?.[calendarId];
+      const errors = calendarResult?.errors ?? [];
+      const busy = calendarResult?.busy ?? [];
+      const normalizedBusy = busy
+        .filter((b): b is { start: string; end: string } => Boolean(b.start && b.end))
+        .map((b) => ({ start: new Date(b.start), end: new Date(b.end) }));
+
+      if (process.env.CALENDAR_DEBUG === "1") {
+        console.log("[CALENDAR_DEBUG] freebusy.query", {
+          calendarId: maskCalendarId(calendarId),
+          timeMin,
+          timeMax,
+          busy: normalizedBusy.map((b) => ({ start: b.start.toISOString(), end: b.end.toISOString() })),
+          errors,
+        });
+      }
+
+      // Google returns errors per-calendar rather than throwing (e.g. the
+      // calendarId doesn't exist, or this account lacks access to it) - if we
+      // ignored this and only looked at `busy`, a misconfigured calendarId
+      // would silently read back as "successfully checked, nothing booked"
+      // instead of "could not check", letting bookings through with no real
+      // double-booking protection.
+      if (errors.length > 0) {
+        return { ok: false, error: describeFreeBusyErrors(errors) };
+      }
+
+      return { ok: true, busy: normalizedBusy };
     } catch (err) {
       return { ok: false, error: describeError(err) };
     }

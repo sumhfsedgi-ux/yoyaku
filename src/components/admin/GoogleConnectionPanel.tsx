@@ -36,8 +36,8 @@ export function GoogleConnectionPanel({ initialStatus }: { initialStatus: Google
   function handleTestCalendar() {
     startTestingCalendar(async () => {
       const result = await testGoogleCalendarConnection();
-      if (result.ok) toast.success("Google Calendarとの接続を確認できました");
-      else toast.error("接続を確認できませんでした。しばらくしてから再度お試しください。");
+      if (result.ok) toast.success("部屋カレンダーとの接続を確認できました");
+      else toast.error("設定されているカレンダーを確認できません。Calendar IDまたはアクセス権限をご確認ください。");
     });
   }
 
@@ -74,7 +74,7 @@ export function GoogleConnectionPanel({ initialStatus }: { initialStatus: Google
         onTest={handleTestCalendar}
         testing={testingCalendar}
       >
-        {status.calendar.connected && status.calendar.roomCalendars.length > 1 && (
+        {status.calendar.connected && status.calendar.roomCalendars.length > 0 && (
           <div className="mt-4 border-t border-border pt-4">
             <p className="mb-3 text-sm font-semibold text-foreground">部屋ごとのカレンダーID</p>
             {status.calendar.roomCalendars.map((rc) => (
