@@ -125,17 +125,22 @@ export async function getGoogleConnectionStatus(): Promise<GoogleConnectionStatu
   };
 }
 
+/** One-day FreeBusy probe against a specific calendarId - shared by the "接続確認" button and updateRoomCalendarId below, so a bad id is caught the moment it's saved, not only when someone later happens to click 接続確認. */
+async function probeCalendarId(googleCalendarId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const now = new Date();
+  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const result = await getCalendarService().getFreeBusy(googleCalendarId, now, tomorrow);
+  if (!result.ok) return { ok: false, error: result.error };
+  return { ok: true };
+}
+
 export async function testGoogleCalendarConnection(): Promise<{ ok: true } | { ok: false; error: string }> {
   await requireStaffSession();
 
   const roomCalendar = await prisma.roomCalendar.findFirst({ where: { active: true } });
   if (!roomCalendar) return { ok: false, error: "対象の部屋にGoogleカレンダーが設定されていません。" };
 
-  const now = new Date();
-  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  const result = await getCalendarService().getFreeBusy(roomCalendar.googleCalendarId, now, tomorrow);
-  if (!result.ok) return { ok: false, error: result.error };
-  return { ok: true };
+  return probeCalendarId(roomCalendar.googleCalendarId);
 }
 
 /** Connection-status check only - never sends mail. See sendGoogleGmailTestEmail for an actual send. */
@@ -155,14 +160,5 @@ export async function sendGoogleGmailTestEmail(): Promise<{ ok: true } | { ok: f
     subject: "【テスト】Gmail連携の送信確認",
     text: "このメールはyoyakuのGoogle連携設定画面から送信されたテストメールです。",
     html: "<p>このメールはyoyakuのGoogle連携設定画面から送信されたテストメールです。</p>",
-  });
-}
-
-export async function updateRoomCalendarId(roomId: string, googleCalendarId: string): Promise<void> {
-  await requireStaffSession();
-  await prisma.roomCalendar.upsert({
-    where: { roomId },
-    update: { googleCalendarId },
-    create: { roomId, googleCalendarId },
   });
 }

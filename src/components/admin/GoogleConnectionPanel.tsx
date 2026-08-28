@@ -1,37 +1,29 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { toast } from "sonner";
 import { CheckCircle2Icon, XCircleIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
-  getGoogleConnectionStatus,
   startGoogleCalendarConnection,
   startGoogleGmailConnection,
   testGoogleCalendarConnection,
   testGoogleGmailConnection,
   sendGoogleGmailTestEmail,
-  updateRoomCalendarId,
   type GoogleConnectionStatus,
   type GoogleIntegrationStatus,
 } from "@/actions/googleConnection";
 
 /**
- * `initialStatus` comes from the server (see app/(admin)/settings/google/page.tsx)
- * so the first paint already shows the real connection status - no
- * client-side fetch-on-mount round trip.
+ * `initialStatus` comes from the server (see app/(admin)/settings/google/page.tsx).
+ * Nothing on this page mutates it client-side (連携/再接続 both full-page
+ * redirect through Google's OAuth flow and back), so it's rendered as-is
+ * rather than mirrored into state.
  */
-export function GoogleConnectionPanel({ initialStatus }: { initialStatus: GoogleConnectionStatus }) {
-  const [status, setStatus] = useState<GoogleConnectionStatus>(initialStatus);
-  const [isPending, startTransition] = useTransition();
+export function GoogleConnectionPanel({ initialStatus: status }: { initialStatus: GoogleConnectionStatus }) {
   const [testingCalendar, startTestingCalendar] = useTransition();
   const [testingGmail, startTestingGmail] = useTransition();
   const [sendingTestEmail, startSendingTestEmail] = useTransition();
-
-  async function refresh() {
-    setStatus(await getGoogleConnectionStatus());
-  }
 
   function handleTestCalendar() {
     startTestingCalendar(async () => {
@@ -57,14 +49,6 @@ export function GoogleConnectionPanel({ initialStatus }: { initialStatus: Google
     });
   }
 
-  function handleUpdateCalendarId(roomId: string, value: string) {
-    startTransition(async () => {
-      await updateRoomCalendarId(roomId, value);
-      toast.success("カレンダーIDを更新しました");
-      refresh();
-    });
-  }
-
   return (
     <div className="flex flex-col gap-6">
       <GoogleIntegrationSection
@@ -77,17 +61,19 @@ export function GoogleConnectionPanel({ initialStatus }: { initialStatus: Google
         {status.calendar.connected && status.calendar.roomCalendars.length > 0 && (
           <div className="mt-4 border-t border-border pt-4">
             <p className="mb-3 text-sm font-semibold text-foreground">部屋ごとのカレンダーID</p>
+            {/*
+             * Display-only, deliberately: this id gates whether every
+             * booking's Google double-booking check even runs, and this salon
+             * has no plans for more than one room - a stray edit here (a
+             * save-as-you-click-away input let a typo through in production
+             * once already) has more downside than an in-app editor has
+             * upside. Change it via a DB migration/script if it's ever
+             * actually needed.
+             */}
             {status.calendar.roomCalendars.map((rc) => (
-              <div key={rc.roomId} className="flex items-center gap-2">
-                <span className="w-20 shrink-0 text-sm text-muted-foreground">{rc.roomName}</span>
-                <Input
-                  defaultValue={rc.googleCalendarId}
-                  disabled={isPending}
-                  onBlur={(e) => {
-                    if (e.target.value !== rc.googleCalendarId) handleUpdateCalendarId(rc.roomId, e.target.value);
-                  }}
-                  className="h-11 text-base"
-                />
+              <div key={rc.roomId} className="flex items-center gap-2 text-sm">
+                <span className="w-20 shrink-0 text-muted-foreground">{rc.roomName}</span>
+                <span className="text-foreground">{rc.googleCalendarId}</span>
               </div>
             ))}
           </div>
