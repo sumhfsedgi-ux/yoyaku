@@ -53,6 +53,8 @@ export class FakeCalendarService implements CalendarService {
   }
 
   async getFreeBusy(calendarId: string, rangeStart: Date, rangeEnd: Date) {
+    // TEMPORARY (perf measurement) - see real.ts's CALENDAR_DEBUG.
+    if (process.env.CALENDAR_DEBUG === "1") console.log(`[CALENDAR_DEBUG] fake.getFreeBusy ${calendarId}`);
     const busy = [...this.events.values()]
       .filter((e) => e.calendarId === calendarId && e.start < rangeEnd && e.end > rangeStart)
       .map((e) => ({ start: e.start, end: e.end }));

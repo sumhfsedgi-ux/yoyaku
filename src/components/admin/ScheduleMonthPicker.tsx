@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DateTime } from "luxon";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,19 @@ interface ScheduleMonthPickerProps {
    * immediately for the currently displayed month, instead of only updating
    * the next time the user changes month. */
   refreshToken?: number;
+  /**
+   * Dates already known to have an override, from the server-fetched list the
+   * parent page loaded for its initial render (OverrideEditor's
+   * initialOverrides). Seeding from this means the picker's default (current
+   * month) view doesn't need its own round trip on mount - only a small tail
+   * of the previous month that can appear in the 42-cell grid (before
+   * "today", which the server list deliberately excludes - see
+   * actions/schedule.ts's getMyScheduleOverrides) might miss its dot until
+   * the user pages away and back, which is an acceptable tradeoff for a
+   * de-emphasized out-of-month cell. Navigating months (or refreshToken
+   * bumping after a save/delete) always fetches fresh, unaffected by this.
+   */
+  initialOverriddenDates?: Set<string>;
 }
 
 /**
@@ -31,17 +44,26 @@ interface ScheduleMonthPickerProps {
  * single ranged query per month change (the same getMyScheduleOverrides
  * action OverrideEditor already uses for its list), never per cell.
  */
-export function ScheduleMonthPicker({ selectedISO, onSelect, refreshToken }: ScheduleMonthPickerProps) {
+export function ScheduleMonthPicker({ selectedISO, onSelect, refreshToken, initialOverriddenDates }: ScheduleMonthPickerProps) {
   const [displayed, setDisplayed] = useState(() =>
     (selectedISO ? DateTime.fromISO(selectedISO) : DateTime.now().setZone("Asia/Tokyo")).startOf("month"),
   );
-  const [overriddenDates, setOverriddenDates] = useState<Set<string>>(new Set());
+  const [overriddenDates, setOverriddenDates] = useState<Set<string>>(() => initialOverriddenDates ?? new Set());
+  const skippedInitialFetch = useRef(false);
 
   const todayISO = DateTime.now().setZone("Asia/Tokyo").toISODate();
   const firstCell = displayed.minus({ days: displayed.weekday % 7 });
   const days = Array.from({ length: 42 }, (_, i) => firstCell.plus({ days: i }));
 
   useEffect(() => {
+    // The very first run, when a seed was provided, is exactly the parent's
+    // already-server-fetched initial month - skip the redundant round trip.
+    // Every later run (month navigation, refreshToken bump after save/delete)
+    // always fetches, same as before this seeding existed.
+    if (!skippedInitialFetch.current) {
+      skippedInitialFetch.current = true;
+      if (initialOverriddenDates) return;
+    }
     let cancelled = false;
     const fromISO = firstCell.toISODate()!;
     const toISO = firstCell.plus({ days: 41 }).toISODate()!;

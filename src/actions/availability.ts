@@ -1,11 +1,11 @@
 "use server";
 
 import { headers } from "next/headers";
-import { prisma } from "@/lib/db/prisma";
 import { computeAvailableSlots, computeAvailabilityForRange } from "@/lib/availability/engine";
 import { prismaAvailabilityDeps } from "@/lib/availability/data";
 import { checkRateLimit } from "@/lib/security/rateLimit";
 import { computeEndDateISO } from "@/lib/reserve/dateGrid";
+import { resolveStaffByBookingSlug } from "@/lib/reservations/staffLookup";
 
 async function clientIp(): Promise<string> {
   const h = await headers();
@@ -28,7 +28,7 @@ export async function getAvailableSlots(bookingSlug: string, dateISO: string): P
   const rateLimit = await checkRateLimit({ key: `avail:${ip}:${bookingSlug}`, limit: 30, windowSeconds: 60 });
   if (!rateLimit.ok) return { ok: false, slots: [], reason: "RATE_LIMITED" };
 
-  const staff = await prisma.staff.findUnique({ where: { bookingSlug }, select: { id: true, active: true } });
+  const staff = await resolveStaffByBookingSlug(bookingSlug);
   if (!staff || !staff.active) return { ok: false, slots: [], reason: "STAFF_NOT_FOUND" };
 
   const result = await computeAvailableSlots({ staffId: staff.id, dateISO }, prismaAvailabilityDeps);
@@ -58,7 +58,7 @@ export async function getAvailableSlotRangeStatus(
   const rateLimit = await checkRateLimit({ key: `avail:${ip}:${bookingSlug}`, limit: 30, windowSeconds: 60 });
   if (!rateLimit.ok) return { ok: false, days: [], reason: "RATE_LIMITED" };
 
-  const staff = await prisma.staff.findUnique({ where: { bookingSlug }, select: { id: true, active: true } });
+  const staff = await resolveStaffByBookingSlug(bookingSlug);
   if (!staff || !staff.active) return { ok: false, days: [], reason: "STAFF_NOT_FOUND" };
 
   const endDateISO = computeEndDateISO(startDateISO);

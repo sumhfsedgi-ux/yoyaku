@@ -7,12 +7,27 @@ import type { CutoffConfig, OverrideRule, StaffAvailabilityConfig, WeeklyRule } 
 
 /** Real, Prisma + Google Calendar backed implementation of ComputeSlotsDeps. */
 export const prismaAvailabilityDeps: ComputeSlotsDeps = {
-  async loadStaffConfig(staffId): Promise<StaffAvailabilityConfig | null> {
+  async loadStaffConfig(staffId, overrideRangeStartISO, overrideRangeEndISO): Promise<StaffAvailabilityConfig | null> {
     const staff = await prisma.staff.findUnique({
       where: { id: staffId },
-      include: {
-        weeklyAvailability: true,
-        scheduleOverrides: { include: { ranges: true } },
+      select: {
+        id: true,
+        active: true,
+        bookingCutoffType: true,
+        bookingCutoffHours: true,
+        bookingCutoffDaysBefore: true,
+        bookingCutoffAtMinute: true,
+        bookingWindowDays: true,
+        weeklyAvailability: { select: { dayOfWeek: true, startMinute: true, endMinute: true } },
+        scheduleOverrides: {
+          where: {
+            date: {
+              gte: new Date(`${overrideRangeStartISO}T00:00:00.000Z`),
+              lte: new Date(`${overrideRangeEndISO}T00:00:00.000Z`),
+            },
+          },
+          select: { date: true, isClosed: true, ranges: { select: { startMinute: true, endMinute: true } } },
+        },
       },
     });
     if (!staff) return null;

@@ -99,6 +99,7 @@ export function DayTimeline({ entries }: { entries: RoomTimelineEntry[] }) {
             <Link
               key={entry.id}
               href={`/reservations/${entry.id}`}
+              prefetch={false}
               className={cn(blockClassName, FOCUS_RING)}
               style={blockStyle(entry.startAt, entry.endAt)}
             >

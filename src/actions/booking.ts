@@ -1,10 +1,10 @@
 "use server";
 
 import { headers } from "next/headers";
-import { prisma } from "@/lib/db/prisma";
 import { createReservation } from "@/lib/reservations/service";
 import type { CreateReservationResult } from "@/lib/reservations/service";
 import { checkRateLimit } from "@/lib/security/rateLimit";
+import { resolveStaffByBookingSlug } from "@/lib/reservations/staffLookup";
 
 async function clientIp(): Promise<string> {
   const h = await headers();
@@ -32,7 +32,7 @@ export async function createCustomerReservation(
   const rateLimit = await checkRateLimit({ key: `book:${ip}`, limit: 5, windowSeconds: 3600 });
   if (!rateLimit.ok) return { ok: false, reason: "RATE_LIMITED" };
 
-  const staff = await prisma.staff.findUnique({ where: { bookingSlug: input.bookingSlug }, select: { id: true, active: true } });
+  const staff = await resolveStaffByBookingSlug(input.bookingSlug);
   if (!staff || !staff.active) return { ok: false, reason: "STAFF_NOT_FOUND" };
 
   return createReservation({

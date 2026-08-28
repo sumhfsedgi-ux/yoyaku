@@ -70,22 +70,38 @@ async function getAnalyticsForRange(staffId: string, range: AnalyticsRange): Pro
   const trendStart = dateOnly(range.trendEnd.minus({ months: TREND_MONTHS - 1 }).toISODate()!);
   const trendEnd = dateOnly(range.trendEnd.endOf("month").toISODate()!);
 
-  const [periodVisits, newCustomers, trendVisits, sources, concerns] = await Promise.all([
+  // periodVisits and trendVisits used to be two separate visitRecord queries,
+  // but one's date range is always a subset of the other's: the month view's
+  // periodFilter is exactly the last month of its own trailing-12-month trend
+  // window, and the all-time view's periodFilter (unbounded) is a superset of
+  // any 12-month trend window. Either way, one query over the WIDER of the
+  // two ranges - with the union of both views' selected fields - covers both;
+  // periodVisits/trendVisits below are then just two in-memory filters over
+  // those same rows, not two round trips.
+  const visitsWhere = range.periodFilter ? { staffId, visitDate: { gte: trendStart, lte: trendEnd } } : { staffId };
+
+  const [visits, newCustomers, sources, concerns] = await Promise.all([
     prisma.visitRecord.findMany({
-      where: { staffId, ...(range.periodFilter ? { visitDate: range.periodFilter } : {}) },
-      select: { amount: true, customer: { select: { firstVisitAcquisitionSourceId: true } }, concerns: { select: { id: true } } },
+      where: visitsWhere,
+      select: {
+        visitDate: true,
+        amount: true,
+        customer: { select: { firstVisitAcquisitionSourceId: true } },
+        concerns: { select: { id: true } },
+      },
     }),
     prisma.customer.findMany({
       where: { ownerStaffId: staffId, ...(range.periodFilter ? { firstVisitDate: range.periodFilter } : {}) },
       select: { firstVisitAcquisitionSourceId: true },
     }),
-    prisma.visitRecord.findMany({
-      where: { staffId, visitDate: { gte: trendStart, lte: trendEnd } },
-      select: { visitDate: true, amount: true },
-    }),
     prisma.acquisitionSourceMaster.findMany({ where: { staffId }, select: { id: true, name: true } }),
     prisma.concernMaster.findMany({ where: { staffId }, select: { id: true, name: true } }),
   ]);
+
+  const periodVisits = range.periodFilter
+    ? visits.filter((v) => v.visitDate >= range.periodFilter!.gte && v.visitDate <= range.periodFilter!.lte)
+    : visits;
+  const trendVisits = visits.filter((v) => v.visitDate >= trendStart && v.visitDate <= trendEnd);
 
   const kpis = computeMonthlyKpis(
     periodVisits.map((v) => ({ amount: v.amount })),

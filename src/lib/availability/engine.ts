@@ -20,7 +20,14 @@ import { APPOINTMENT_DURATION_MINUTES, SALON_TIME_ZONE, SLOT_STEP_MINUTES } from
  * stand-ins directly, keeping this file and rules.ts DB- and network-free.
  */
 export interface ComputeSlotsDeps {
-  loadStaffConfig(staffId: string): Promise<StaffAvailabilityConfig | null>;
+  /**
+   * `overrideRangeStartISO`/`overrideRangeEndISO` (inclusive JST calendar
+   * dates) bound which ScheduleOverride rows get loaded - each caller below
+   * only ever looks up an override for a date within the range it itself is
+   * computing candidates for, so implementations may safely ignore overrides
+   * outside this range (see data.ts, which filters the DB query by it).
+   */
+  loadStaffConfig(staffId: string, overrideRangeStartISO: string, overrideRangeEndISO: string): Promise<StaffAvailabilityConfig | null>;
   /**
    * CONFIRMED reservations for the room, across ALL staff, that could overlap
    * [rangeStart, rangeEnd). `excludeReservationId` is used by reschedule so a
@@ -156,7 +163,10 @@ export async function computeAvailableSlots(
   // result - this is called on every date the customer/staff picks, so
   // running them in parallel instead of one-after-another shaves a full DB
   // round trip off the hottest path in the app.
-  const [config, roomId] = await Promise.all([deps.loadStaffConfig(params.staffId), deps.resolvePrimaryRoomId()]);
+  const [config, roomId] = await Promise.all([
+    deps.loadStaffConfig(params.staffId, params.dateISO, params.dateISO),
+    deps.resolvePrimaryRoomId(),
+  ]);
   if (!config) return { ok: false, reason: "STAFF_NOT_FOUND" };
   if (!config.active) return { ok: false, reason: "STAFF_INACTIVE" };
   if (!roomId) return { ok: false, reason: "ROOM_NOT_FOUND" };
@@ -228,15 +238,25 @@ export async function validateSlotBookable(
   deps: ComputeSlotsDeps,
 ): Promise<ValidateSlotBookableResult> {
   const now = params.now ?? DateTime.now().setZone(SALON_TIME_ZONE);
+  // Parsing startAtUtcIso doesn't depend on config/roomId - done first purely
+  // so its date can bound the ScheduleOverride lookup below (no DB access here).
+  const candidateStart = DateTime.fromISO(params.startAtUtcIso, { zone: "utc" }).setZone(SALON_TIME_ZONE);
+  const candidateEnd = candidateStart.plus({ minutes: APPOINTMENT_DURATION_MINUTES });
+  // A malformed startAtUtcIso (e.g. a forged request) yields an invalid
+  // DateTime here - isCandidateBookable's own check below is what actually
+  // rejects it (INVALID_START_TIME); this fallback only keeps the override
+  // lookup's date range well-formed so that later check is reached at all.
+  const candidateDateISO = candidateStart.isValid ? candidateStart.toISODate()! : now.toISODate()!;
+
   // Same independent-lookup parallelization as computeAvailableSlots above -
   // this path runs again at booking confirmation, so it matters just as much.
-  const [config, roomId] = await Promise.all([deps.loadStaffConfig(params.staffId), deps.resolvePrimaryRoomId()]);
+  const [config, roomId] = await Promise.all([
+    deps.loadStaffConfig(params.staffId, candidateDateISO, candidateDateISO),
+    deps.resolvePrimaryRoomId(),
+  ]);
   if (!config) return { ok: false, reason: "STAFF_NOT_FOUND" };
   if (!config.active) return { ok: false, reason: "STAFF_INACTIVE" };
   if (!roomId) return { ok: false, reason: "ROOM_NOT_FOUND" };
-
-  const candidateStart = DateTime.fromISO(params.startAtUtcIso, { zone: "utc" }).setZone(SALON_TIME_ZONE);
-  const candidateEnd = candidateStart.plus({ minutes: APPOINTMENT_DURATION_MINUTES });
 
   const rangeStart = candidateStart.minus({ minutes: APPOINTMENT_DURATION_MINUTES }).toJSDate();
   const rangeEnd = candidateEnd.plus({ minutes: APPOINTMENT_DURATION_MINUTES }).toJSDate();
@@ -308,7 +328,10 @@ export async function computeAvailabilityForRange(
   deps: ComputeSlotsDeps,
 ): Promise<ComputeAvailabilityForRangeResult> {
   const now = params.now ?? DateTime.now().setZone(SALON_TIME_ZONE);
-  const [config, roomId] = await Promise.all([deps.loadStaffConfig(params.staffId), deps.resolvePrimaryRoomId()]);
+  const [config, roomId] = await Promise.all([
+    deps.loadStaffConfig(params.staffId, params.startDateISO, params.endDateISO),
+    deps.resolvePrimaryRoomId(),
+  ]);
   if (!config) return { ok: false, reason: "STAFF_NOT_FOUND" };
   if (!config.active) return { ok: false, reason: "STAFF_INACTIVE" };
   if (!roomId) return { ok: false, reason: "ROOM_NOT_FOUND" };

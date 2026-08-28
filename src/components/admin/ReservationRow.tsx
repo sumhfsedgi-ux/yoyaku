@@ -44,7 +44,7 @@ export function ReservationRow({ row }: { row: RoomUsageRow }) {
     return <div aria-disabled="true">{content}</div>;
   }
   return (
-    <Link href={`/reservations/${row.id}`} className={cn("block rounded-xl", FOCUS_RING)}>
+    <Link href={`/reservations/${row.id}`} prefetch={false} className={cn("block rounded-xl", FOCUS_RING)}>
       {content}
     </Link>
   );

@@ -12,7 +12,15 @@ import { ConcernRankingChart } from "@/components/admin/analytics/ConcernRanking
 import { AnalyticsRangeToggle } from "@/components/admin/analytics/AnalyticsRangeToggle";
 import { RetailAnalyticsSection } from "@/components/admin/retail/RetailAnalyticsSection";
 
+// TEMPORARY (perf investigation, see .claude/plans): when PERF_DEBUG=1, logs
+// this page's own Promise.all wall-clock and total, alongside the individual
+// [perf:db] query timings already logged by lib/db/prisma.ts - the SUM of
+// those per-query numbers is NOT the same as how long the user actually
+// waited (they run concurrently), which is what this line reports instead.
+const PERF_DEBUG = process.env.PERF_DEBUG === "1";
+
 export default async function AnalyticsPage({ searchParams }: { searchParams: Promise<{ month?: string; range?: string }> }) {
+  const t0 = performance.now();
   const params = await searchParams;
   const current = params.month ? DateTime.fromFormat(params.month, "yyyy-MM") : nowJst().startOf("month");
   const year = current.year;
@@ -20,11 +28,14 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Pr
   const yearMonth = current.toFormat("yyyy-MM");
   const range = params.range === "all" ? "all" : "month";
 
+  const t1 = performance.now();
   const [analytics, retailAnalytics] = range === "all"
     ? await Promise.all([getMyAllTimeAnalytics(), getMyAllTimeRetailAnalytics()])
     : await Promise.all([getMyMonthlyAnalytics(year, month), getMyMonthlyRetailAnalytics(year, month)]);
+  if (PERF_DEBUG) console.log(`[perf:analytics] Promise.all(analytics, retailAnalytics) ${(performance.now() - t1).toFixed(1)}ms`);
 
   const trendSelectedYearMonth = range === "all" ? nowJst().toFormat("yyyy-MM") : yearMonth;
+  if (PERF_DEBUG) console.log(`[perf:analytics] total ${(performance.now() - t0).toFixed(1)}ms`);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6 md:px-8 md:py-8">

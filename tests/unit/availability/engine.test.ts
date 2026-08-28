@@ -67,7 +67,7 @@ interface FakeWorld {
 
 function makeDeps(world: FakeWorld): ComputeSlotsDeps {
   return {
-    async loadStaffConfig(staffId) {
+    async loadStaffConfig(staffId, _overrideRangeStartISO, _overrideRangeEndISO) {
       return world.configs.get(staffId) ?? null;
     },
     async loadRoomReservations(_roomId, rangeStart, rangeEnd, excludeReservationId) {

@@ -171,6 +171,7 @@ function MonthDayCell({
             <Link
               key={entry.id}
               href={`/reservations/${entry.id}`}
+              prefetch={false}
               className={cn(chipClassName, FOCUS_RING, "hover:bg-primary/25 active:bg-primary/30")}
             >
               {chipContent}

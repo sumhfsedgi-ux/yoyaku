@@ -60,6 +60,10 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
   const [existing, setExisting] = useState<OverrideListItem[]>(initialOverrides);
   const [calendarRefreshToken, setCalendarRefreshToken] = useState(0);
   const [isPending, startTransition] = useTransition();
+  // Seeds ScheduleMonthPicker's "設定あり" dots for its default (current
+  // month) view from this same server-fetched list, so it doesn't need its
+  // own round trip on mount - see ScheduleMonthPicker's initialOverriddenDates doc.
+  const [initialOverriddenDates] = useState(() => new Set(initialOverrides.map((o) => o.dateISO)));
 
   /**
    * Selecting a date that already has a saved override must pre-fill the
@@ -135,7 +139,12 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
     <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_320px] md:items-start lg:grid-cols-[minmax(420px,480px)_minmax(0,1fr)] lg:items-stretch">
       <section className="md:col-start-1 md:row-start-1">
         <p className="mb-2 text-sm font-medium text-foreground">日付を選択</p>
-        <ScheduleMonthPicker selectedISO={dateISO} onSelect={handleSelectDate} refreshToken={calendarRefreshToken} />
+        <ScheduleMonthPicker
+          selectedISO={dateISO}
+          onSelect={handleSelectDate}
+          refreshToken={calendarRefreshToken}
+          initialOverriddenDates={initialOverriddenDates}
+        />
       </section>
 
       {dateISO && (
