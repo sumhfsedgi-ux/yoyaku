@@ -100,18 +100,32 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
     setCalendarRefreshToken((n) => n + 1);
   }
 
-  const canSave = isClosed || ranges.length > 0;
+  // Removing every time-range row (without checking 終日休みにする) leaves
+  // nothing left to upsert - the server rejects a non-closed override with
+  // zero ranges. If this date already has a saved override, that empty state
+  // means "remove it", so Save must delete it instead of upserting; without
+  // this, removing the last range left the Save button permanently disabled
+  // with no way to actually persist the removal (looked like the trash
+  // button "did nothing").
+  const hasExistingOverride = dateISO !== null && existing.some((e) => e.dateISO === dateISO);
+  const willDeleteOnSave = !isClosed && ranges.length === 0 && hasExistingOverride;
+  const canSave = isClosed || ranges.length > 0 || willDeleteOnSave;
 
   function handleSave() {
     if (!dateISO || !canSave) return;
     startTransition(async () => {
       try {
-        await upsertMyScheduleOverride({
-          dateISO,
-          isClosed,
-          ranges: isClosed ? [] : ranges.map((r) => ({ startMinute: r.startMinute, endMinute: r.endMinute })),
-        });
-        toast.success("個別日付設定を保存しました");
+        if (willDeleteOnSave) {
+          await deleteMyScheduleOverride(dateISO);
+          toast.success("個別日付設定を削除しました");
+        } else {
+          await upsertMyScheduleOverride({
+            dateISO,
+            isClosed,
+            ranges: isClosed ? [] : ranges.map((r) => ({ startMinute: r.startMinute, endMinute: r.endMinute })),
+          });
+          toast.success("個別日付設定を保存しました");
+        }
         setDateISO(null);
         setIsClosed(false);
         setRanges([]);
@@ -207,10 +221,13 @@ export function OverrideEditor({ initialOverrides }: { initialOverrides: Overrid
             </div>
           )}
 
+          {willDeleteOnSave && (
+            <p className="mt-3 text-xs text-muted-foreground">時間帯がすべて削除されました。保存するとこの日の個別設定自体が削除され、通常スケジュールに戻ります。</p>
+          )}
           {!canSave && <p className="mt-3 text-xs text-muted-foreground">時間帯を追加するか、終日休みにチェックしてください。</p>}
 
           <Button size="touch" disabled={!canSave || isPending} onClick={handleSave} className="mt-4 w-full">
-            {isPending ? "保存中..." : "保存する"}
+            {isPending ? "保存中..." : willDeleteOnSave ? "個別設定を削除する" : "保存する"}
           </Button>
         </section>
       )}
