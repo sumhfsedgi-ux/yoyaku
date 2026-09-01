@@ -195,8 +195,16 @@ model Reservation {
   customerId String
   customer   Customer @relation(fields: [customerId], references: [id])
 
-  /// Always startAt + 90 minutes; stored explicitly for the EXCLUDE constraint and
-  /// for simple range queries without recomputing the duration everywhere.
+  /// The actual 60-minute service time (SERVICE_DURATION_MINUTES) - NEVER the
+  /// buffered room-occupancy window. Room occupancy for conflict detection
+  /// (15min setup + 60min service + 15min cleanup = 90min total) is computed
+  /// on the fly (see src/lib/availability/rules.ts's getOccupiedRange) and
+  /// never persisted. The EXCLUDE constraint "reservation_no_room_overlap"
+  /// (raw SQL, not representable here - see prisma/migrations) enforces the
+  /// BUFFERED range via the IMMUTABLE helper reservation_occupied_range(startAt,
+  /// endAt) (expands to startAt - 15min .. endAt + 15min), not these raw
+  /// columns directly - the DB-level guarantee is intentionally stricter than
+  /// what startAt/endAt alone represent.
   startAt DateTime @db.Timestamptz
   endAt   DateTime @db.Timestamptz
 

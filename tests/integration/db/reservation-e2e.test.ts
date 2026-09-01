@@ -5,7 +5,7 @@ import { getFakeCalendarServiceForTests } from "@/lib/google/calendar/factory";
 import { getFakeGmailServiceForTests } from "@/lib/google/gmail/factory";
 import { resetDb, seedRoom, seedStaff } from "../../helpers/db";
 
-const MONDAY_START = "2026-08-31T04:00:00.000Z"; // 13:00 JST on a Monday
+const MONDAY_START = "2026-09-07T04:00:00.000Z"; // 13:00 JST on a Monday
 
 async function seedBookableStaff() {
   const staff = await seedStaff({
@@ -58,11 +58,19 @@ describe("createReservation end-to-end (spec case 10: DB + Calendar + Gmail)", (
     const calendarService = getFakeCalendarServiceForTests();
     const busy = await calendarService.getFreeBusy(
       "primary",
-      new Date("2026-08-31T00:00:00.000Z"),
-      new Date("2026-09-01T00:00:00.000Z"),
+      new Date("2026-09-07T00:00:00.000Z"),
+      new Date("2026-09-08T00:00:00.000Z"),
     );
     expect(busy.ok).toBe(true);
     if (busy.ok) expect(busy.busy).toHaveLength(1);
+    // The reservation's own stored startAt/endAt is the raw actual 60-minute
+    // service time (13:00-14:00), but the event pushed to Google is the
+    // BUFFERED occupied window (12:45-14:15) - see
+    // syncReservationToCalendarBestEffort.
+    if (busy.ok) {
+      expect(busy.busy[0].start.toISOString()).toBe("2026-09-07T03:45:00.000Z"); // 12:45 JST
+      expect(busy.busy[0].end.toISOString()).toBe("2026-09-07T05:15:00.000Z"); // 14:15 JST
+    }
 
     expect(fakeGmail.sent).toHaveLength(2);
     const customerEmail = fakeGmail.sent.find((m) => m.to === "hanako@example.com");
@@ -71,10 +79,11 @@ describe("createReservation end-to-end (spec case 10: DB + Calendar + Gmail)", (
     expect(staffEmail).toBeDefined();
     // Customer email must show start time only, never the end time / duration.
     expect(customerEmail!.text).toContain("13:00");
-    expect(customerEmail!.text).not.toContain("14:30");
-    // Staff email is allowed to show the full range.
+    expect(customerEmail!.text).not.toContain("14:00");
+    // Staff email is allowed to show the full range - the actual 60-minute
+    // service time (13:00-14:00), not the buffered Calendar push window.
     expect(staffEmail!.text).toContain("13:00");
-    expect(staffEmail!.text).toContain("14:30");
+    expect(staffEmail!.text).toContain("14:00");
   });
 
   it("the Calendar event carries no customer PII in its title/description", async () => {
@@ -165,16 +174,16 @@ describe("createReservation end-to-end (spec case 10: DB + Calendar + Gmail)", (
     });
     await createReservation({
       staffId: staffA.id,
-      startAtUtcIso: "2026-09-07T04:00:00.000Z", // next Monday, same staff
+      startAtUtcIso: "2026-09-14T04:00:00.000Z", // next Monday, same staff
       source: "CUSTOMER_ONLINE",
       customer: { name: "リピート客", email, phone: "090-2222-2222" },
     });
-    // Different time slot than staffA's Aug31 13:00 booking - the room is
+    // Different time slot than staffA's Sep7 13:00 booking - the room is
     // shared, so booking the exact same time under a different staff would be
     // a legitimate ROOM_CONFLICT (that's spec case 4), not what this test is about.
     await createReservation({
       staffId: staffB.id,
-      startAtUtcIso: "2026-08-31T07:00:00.000Z", // 16:00 JST, same day, clear of staffA's slot
+      startAtUtcIso: "2026-09-07T07:00:00.000Z", // 16:00 JST, same day, clear of staffA's slot
       source: "CUSTOMER_ONLINE",
       customer: { name: "リピート客", email, phone: "090-2222-2222" },
     });

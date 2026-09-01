@@ -57,6 +57,18 @@ export interface Candidate {
 }
 
 /** Fixed business rules shared across the whole availability engine. */
-export const APPOINTMENT_DURATION_MINUTES = 90;
+export const SERVICE_DURATION_MINUTES = 60;
+export const RESERVATION_BUFFER_BEFORE_MINUTES = 15;
+export const RESERVATION_BUFFER_AFTER_MINUTES = 15;
 export const SLOT_STEP_MINUTES = 15;
 export const SALON_TIME_ZONE = "Asia/Tokyo";
+
+/**
+ * Query-window padding, in minutes, generous enough that no reservation whose
+ * buffered occupied window could reach into a candidate's day is ever missed
+ * by a DB/Calendar range fetch. Sized as buffer+service+buffer (90) so the
+ * safety margin stays obviously generous rather than a tightly-derived
+ * asymmetric minimum.
+ */
+export const MAX_RESERVATION_QUERY_PADDING_MINUTES =
+  RESERVATION_BUFFER_BEFORE_MINUTES + SERVICE_DURATION_MINUTES + RESERVATION_BUFFER_AFTER_MINUTES;

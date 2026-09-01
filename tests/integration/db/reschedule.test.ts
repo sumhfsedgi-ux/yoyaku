@@ -1,11 +1,12 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db/prisma";
 import { createReservation, rescheduleReservation } from "@/lib/reservations/service";
+import { getFakeCalendarServiceForTests } from "@/lib/google/calendar/factory";
 import { resetDb, seedRoom, seedStaff } from "../../helpers/db";
 
-const MONDAY_1300 = "2026-08-31T04:00:00.000Z"; // 13:00 JST
-const MONDAY_1600 = "2026-08-31T07:00:00.000Z"; // 16:00 JST
-const MONDAY_1730 = "2026-08-31T08:30:00.000Z"; // 17:30 JST -> 19:00, still within 10-19 hours
+const MONDAY_1300 = "2026-09-07T04:00:00.000Z"; // 13:00 JST
+const MONDAY_1600 = "2026-09-07T07:00:00.000Z"; // 16:00 JST
+const MONDAY_1730 = "2026-09-07T08:30:00.000Z"; // 17:30 JST -> 18:30, still within 10-19 hours (60-minute service)
 
 async function seedBookableStaff(slug: string) {
   const staff = await seedStaff({
@@ -68,9 +69,15 @@ describe("rescheduleReservation (spec §5/§27 + case 11)", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
-    // Move 15 minutes later - the new [13:15,14:45) window overlaps the
-    // reservation's own current [13:00,14:30) row, which must not self-conflict.
-    const newStart = "2026-08-31T04:15:00.000Z";
+    // Move 15 minutes later - the new actual [13:15,14:15) window overlaps the
+    // reservation's own current actual [13:00,14:00) row (and, via the
+    // buffered occupied windows, its own already-synced Google Calendar
+    // event at [12:45,14:15)) - neither must self-conflict. This is also the
+    // integration-level regression check for excludeCalendarBusyInterval
+    // being buffered to match what's actually pushed to Google (see
+    // rescheduleReservation in service.ts) - without that fix, this would
+    // falsely come back CALENDAR_BUSY.
+    const newStart = "2026-09-07T04:15:00.000Z";
     const result = await rescheduleReservation({ reservationId: created.reservationId, newStartAtUtcIso: newStart });
     expect(result).toEqual({ ok: true });
   });
@@ -125,5 +132,20 @@ describe("rescheduleReservation (spec §5/§27 + case 11)", () => {
     const afterMove = await prisma.reservation.findUnique({ where: { id: created.reservationId } });
     expect(afterMove?.googleSyncStatus).toBe("SYNCED");
     expect(afterMove?.googleEventId).toBe(beforeMove?.googleEventId); // same event, updated in place
+    // The reservation's stored startAt/endAt is the raw actual 17:30-18:30
+    // service time, but the pushed Calendar event is the BUFFERED occupied
+    // window (17:15-18:45) - see syncReservationToCalendarBestEffort.
+    expect(afterMove?.startAt.toISOString()).toBe(MONDAY_1730);
+    expect(afterMove?.endAt.toISOString()).toBe("2026-09-07T09:30:00.000Z"); // 18:30 JST
+    const busy = await getFakeCalendarServiceForTests().getFreeBusy(
+      "primary",
+      new Date("2026-09-07T00:00:00.000Z"),
+      new Date("2026-09-08T00:00:00.000Z"),
+    );
+    expect(busy.ok).toBe(true);
+    if (!busy.ok) return;
+    expect(busy.busy).toHaveLength(1);
+    expect(busy.busy[0].start.toISOString()).toBe("2026-09-07T08:15:00.000Z"); // 17:15 JST
+    expect(busy.busy[0].end.toISOString()).toBe("2026-09-07T09:45:00.000Z"); // 18:45 JST
   });
 });

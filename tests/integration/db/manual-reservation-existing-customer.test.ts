@@ -17,7 +17,7 @@ async function sessionAs(staffId: string) {
   } as never);
 }
 
-const MONDAY_START = "2026-08-31T04:00:00.000Z"; // 13:00 JST on a Monday
+const MONDAY_START = "2026-09-07T04:00:00.000Z"; // 13:00 JST on a Monday
 
 async function seedBookableStaff(overrides: Parameters<typeof seedStaff>[0] = {}) {
   const staff = await seedStaff({

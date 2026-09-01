@@ -75,7 +75,7 @@ export default async function ReservationDetailPage({ params }: { params: Promis
         </dl>
       </div>
 
-      {detail.status === "CONFIRMED" && detail.googleSyncStatus === "FAILED" && (
+      {detail.googleSyncStatus === "FAILED" && (
         <div className="mb-3">
           <ResyncCalendarEventButton reservationId={detail.id} />
         </div>

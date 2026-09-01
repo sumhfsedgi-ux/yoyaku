@@ -99,17 +99,18 @@ describe("computeAvailableSlots", () => {
     const result = await computeAvailableSlots({ staffId: STAFF_A, dateISO: MONDAY, now: NOW }, makeDeps(world));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // 10:00-19:00 range, last bookable start is 17:30 (17:30-19:00)
+    // 10:00-19:00 range, last bookable start is 18:00 (18:00-19:00, 60-minute service)
     expect(result.slots[0]).toBe(DateTime.fromISO(`${MONDAY}T10:00`, { zone: SALON_TIME_ZONE }).toUTC().toISO());
     expect(result.slots.at(-1)).toBe(
-      DateTime.fromISO(`${MONDAY}T17:30`, { zone: SALON_TIME_ZONE }).toUTC().toISO(),
+      DateTime.fromISO(`${MONDAY}T18:00`, { zone: SALON_TIME_ZONE }).toUTC().toISO(),
     );
   });
 
   it("case 4: staff A has no reservations of her own, but staff B's room reservation blocks the shared room", async () => {
     const world: FakeWorld = {
       configs: new Map([[STAFF_A, baseConfig(STAFF_A)]]),
-      roomReservations: [{ start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:30`) }],
+      // 60-minute actual reservation; conflict checks buffer it to occupied [12:45,14:15).
+      roomReservations: [{ start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:00`) }],
       calendarBusy: [],
     };
     const result = await computeAvailableSlots({ staffId: STAFF_A, dateISO: MONDAY, now: NOW }, makeDeps(world));
@@ -130,11 +131,17 @@ describe("computeAvailableSlots", () => {
     const result = await computeAvailableSlots({ staffId: STAFF_A, dateISO: MONDAY, now: NOW }, makeDeps(world));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // 14:30-16:00 candidate overlaps the 15:00-16:00 Google event -> excluded
+    // 14:30-15:30 candidate occupies [14:15,15:45) - overlaps the 15:00-16:00
+    // Google event (unbuffered on the Google side) -> excluded.
     const overlapping = DateTime.fromISO(`${MONDAY}T14:30`, { zone: SALON_TIME_ZONE }).toUTC().toISO();
-    // 16:00-17:30 does not overlap -> included
-    const clear = DateTime.fromISO(`${MONDAY}T16:00`, { zone: SALON_TIME_ZONE }).toUTC().toISO();
+    // 16:15-17:15 occupies [16:00,17:30) - only touches the busy window's end
+    // (16:00) -> included. 16:00 itself would occupy [15:45,17:15), which DOES
+    // overlap [15:00,16:00) - it's excluded, per the candidate-side-only buffer.
+    const clear = DateTime.fromISO(`${MONDAY}T16:15`, { zone: SALON_TIME_ZONE }).toUTC().toISO();
     expect(result.slots).not.toContain(overlapping);
+    expect(result.slots).not.toContain(
+      DateTime.fromISO(`${MONDAY}T16:00`, { zone: SALON_TIME_ZONE }).toUTC().toISO(),
+    );
     expect(result.slots).toContain(clear);
   });
 
@@ -164,11 +171,16 @@ describe("computeAvailableSlots", () => {
   });
 
   it("reschedule listing: excludeReservationId/excludeCalendarBusyInterval keep a reservation's own current slot from hiding nearby candidates", async () => {
-    const ownReservation: FakeReservation = { start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:30`), id: "resv_self" };
+    // 60-minute actual reservation (13:00-14:00). Its own Google event is
+    // synced at the buffered occupied window (12:45-14:15) - see
+    // syncReservationToCalendarBestEffort - so that's what calendarBusy and
+    // excludeCalendarBusyInterval carry here, not the raw 13:00-14:00.
+    const ownReservation: FakeReservation = { start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:00`), id: "resv_self" };
+    const ownOccupied = { start: jst(`${MONDAY}T12:45`), end: jst(`${MONDAY}T14:15`) };
     const world: FakeWorld = {
       configs: new Map([[STAFF_A, baseConfig(STAFF_A)]]),
       roomReservations: [ownReservation],
-      calendarBusy: [{ start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:30`) }],
+      calendarBusy: [ownOccupied],
     };
     const result = await computeAvailableSlots(
       {
@@ -176,23 +188,25 @@ describe("computeAvailableSlots", () => {
         dateISO: MONDAY,
         now: NOW,
         excludeReservationId: "resv_self",
-        excludeCalendarBusyInterval: { start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:30`) },
+        excludeCalendarBusyInterval: ownOccupied,
       },
       makeDeps(world),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    // 13:15 would overlap the reservation's own old [13:00,14:30) span in both
-    // the room-reservations table and the calendar - without exclusion it
-    // would be falsely hidden.
+    // 13:15 would overlap the reservation's own old span in both the
+    // room-reservations table and the calendar - without exclusion it would
+    // be falsely hidden.
     const nearOwnSlot = DateTime.fromISO(`${MONDAY}T13:15`, { zone: SALON_TIME_ZONE }).toUTC().toISO();
     expect(result.slots).toContain(nearOwnSlot);
   });
 
-  it("regression: a Google Calendar busy 10:00-15:00 excludes every 90-minute candidate overlapping it, and only those", async () => {
+  it("regression: a Google Calendar busy 10:00-15:00 excludes every candidate whose BUFFERED occupied window overlaps it, and only those", async () => {
     // Real production bug report: an event registered directly in Google
     // Calendar (not through this app) failed to block the corresponding
-    // slots in the customer-facing available-times list.
+    // slots in the customer-facing available-times list. Only the candidate
+    // side gets the 15-minute buffer here - the Google interval is compared
+    // as-is (per plan's "Google直接予定" worked example).
     const world: FakeWorld = {
       configs: new Map([[STAFF_A, baseConfig(STAFF_A, { weekly: WIDE_HOURS_WEEKLY })]]),
       roomReservations: [],
@@ -202,15 +216,19 @@ describe("computeAvailableSlots", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    // 08:30-10:00 only touches the busy window's start - not an overlap.
+    // 08:30 occupies [08:15,09:45) - only touches the busy window's start - not an overlap.
     expect(result.slots).toContain(slotAt(MONDAY, "08:30"));
-    // 08:45-10:15 through 13:15-14:45 all overlap 10:00-15:00 - excluded.
-    expect(result.slots).not.toContain(slotAt(MONDAY, "08:45"));
+    // 08:45 occupies [08:30,10:00) - also only touches (10:00 boundary) - not an overlap.
+    expect(result.slots).toContain(slotAt(MONDAY, "08:45"));
+    // 09:00 occupies [08:45,10:15) through 14:45 occupies [14:30,16:15) all overlap 10:00-15:00 - excluded.
+    expect(result.slots).not.toContain(slotAt(MONDAY, "09:00"));
     expect(result.slots).not.toContain(slotAt(MONDAY, "10:00"));
     expect(result.slots).not.toContain(slotAt(MONDAY, "12:00"));
     expect(result.slots).not.toContain(slotAt(MONDAY, "14:45"));
-    // 15:00-16:30 only touches the busy window's end - not an overlap.
-    expect(result.slots).toContain(slotAt(MONDAY, "15:00"));
+    // 15:00 occupies [14:45,16:15) - still overlaps (14:45 < 15:00) - excluded.
+    expect(result.slots).not.toContain(slotAt(MONDAY, "15:00"));
+    // 15:15 occupies [15:00,16:30) - only touches the busy window's end - not an overlap.
+    expect(result.slots).toContain(slotAt(MONDAY, "15:15"));
   });
 });
 
@@ -218,7 +236,7 @@ describe("validateSlotBookable", () => {
   it("case 8 (single-request half): re-validating a slot that is already taken in the room returns ROOM_CONFLICT", async () => {
     const world: FakeWorld = {
       configs: new Map([[STAFF_A, baseConfig(STAFF_A)]]),
-      roomReservations: [{ start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:30`) }],
+      roomReservations: [{ start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:00`) }],
       calendarBusy: [],
     };
     const startAtUtcIso = DateTime.fromISO(`${MONDAY}T13:00`, { zone: SALON_TIME_ZONE }).toUTC().toISO()!;
@@ -227,7 +245,7 @@ describe("validateSlotBookable", () => {
   });
 
   it("reschedule: excludeReservationId lets a reservation's own current slot not conflict with itself", async () => {
-    const reservation: FakeReservation = { start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:30`), id: "resv_1" };
+    const reservation: FakeReservation = { start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:00`), id: "resv_1" };
     const world: FakeWorld = {
       configs: new Map([[STAFF_A, baseConfig(STAFF_A)]]),
       roomReservations: [reservation],
@@ -242,11 +260,13 @@ describe("validateSlotBookable", () => {
   });
 
   it("reschedule: excludeCalendarBusyInterval lets a reservation's own still-unmoved Google event not conflict with its new time", async () => {
-    // The reservation's OWN Google Calendar event is still sitting at its old
-    // time (13:00-14:30) until the post-commit sync moves it - without
-    // excluding that exact interval, moving to an overlapping new time
-    // (13:15-14:45) would falsely read back as CALENDAR_BUSY against itself.
-    const oldInterval = { start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:30`) };
+    // The reservation's OWN Google Calendar event is synced at its BUFFERED
+    // occupied window (see syncReservationToCalendarBestEffort) - for an
+    // actual 13:00-14:00 reservation that's 12:45-14:15 - and is still
+    // sitting there until the post-commit sync moves it. Without excluding
+    // that exact interval, moving to an overlapping new time (13:15-14:15)
+    // would falsely read back as CALENDAR_BUSY against itself.
+    const oldInterval = { start: jst(`${MONDAY}T12:45`), end: jst(`${MONDAY}T14:15`) };
     const world: FakeWorld = {
       configs: new Map([[STAFF_A, baseConfig(STAFF_A)]]),
       roomReservations: [],
@@ -261,7 +281,7 @@ describe("validateSlotBookable", () => {
   });
 
   it("excludeCalendarBusyInterval only filters an exact match - a genuinely different busy event still blocks", async () => {
-    const oldInterval = { start: jst(`${MONDAY}T13:00`), end: jst(`${MONDAY}T14:30`) };
+    const oldInterval = { start: jst(`${MONDAY}T12:45`), end: jst(`${MONDAY}T14:15`) };
     const otherEvent = { start: jst(`${MONDAY}T15:00`), end: jst(`${MONDAY}T16:00`) };
     const world: FakeWorld = {
       configs: new Map([[STAFF_A, baseConfig(STAFF_A)]]),
@@ -278,11 +298,13 @@ describe("validateSlotBookable", () => {
 
   it.each([
     ["08:30", true],
-    ["08:45", false],
+    ["08:45", true],
+    ["09:00", false],
     ["10:00", false],
     ["12:00", false],
     ["14:45", false],
-    ["15:00", true],
+    ["15:00", false],
+    ["15:15", true],
   ] as const)(
     "regression: Google busy 10:00-15:00, direct request for %s is %s",
     async (time, expectOk) => {
@@ -311,7 +333,7 @@ describe("validateSlotBookable", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("case 13: a start time not on a 15-minute boundary is rejected even when the 90-minute span fits within business hours", async () => {
+  it("case 13: a start time not on a 15-minute boundary is rejected even when the 60-minute span fits within business hours", async () => {
     const world: FakeWorld = {
       configs: new Map([[STAFF_A, baseConfig(STAFF_A)]]),
       roomReservations: [],
@@ -616,7 +638,7 @@ describe("computeAvailabilityForRange", () => {
       ]),
       roomReservations: [
         { start: jst("2026-08-26T10:00"), end: jst("2026-08-26T19:00") },
-        { start: jst("2026-08-31T12:00"), end: jst("2026-08-31T13:30") },
+        { start: jst("2026-08-31T12:00"), end: jst("2026-08-31T13:00") },
       ],
       calendarBusy: [{ start: jst("2026-09-01T10:00"), end: jst("2026-09-01T19:00") }],
     };

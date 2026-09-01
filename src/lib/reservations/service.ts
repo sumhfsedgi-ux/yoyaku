@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/db/prisma";
 import { validateSlotBookable } from "@/lib/availability/engine";
 import { prismaAvailabilityDeps } from "@/lib/availability/data";
+import { SERVICE_DURATION_MINUTES } from "@/lib/availability/types";
+import { getOccupiedRange } from "@/lib/availability/rules";
 import { getCalendarService } from "@/lib/google/calendar/factory";
 import { getGmailService } from "@/lib/google/gmail/factory";
 import { resolveRoomCalendarId } from "@/lib/google/roomCalendar";
@@ -9,7 +11,7 @@ import { createReservationInputSchema, rescheduleReservationInputSchema } from "
 import { normalizePhoneDigits } from "@/lib/customers/normalize";
 import { isExclusionConstraintViolation } from "./errors";
 
-const APPOINTMENT_DURATION_MS = 90 * 60 * 1000;
+const SERVICE_DURATION_MS = SERVICE_DURATION_MINUTES * 60 * 1000;
 
 export interface CreateReservationInput {
   staffId: string;
@@ -41,6 +43,12 @@ export type CreateReservationResult =
  * Calendar/Gmail are explicitly NOT in the critical path of the booking
  * response (see plan §5/§23). Failures are recorded on the reservation row
  * (googleSyncStatus) so staff can see and manually resync later.
+ *
+ * Pushes the BUFFERED occupied window (actual service time ±15min), not the
+ * raw reservation.startAt/endAt, so a staff member looking directly at Google
+ * Calendar sees the setup/cleanup buffer visually blocked too - see
+ * getOccupiedRange. rescheduleReservation's self-exclusion filter must stay
+ * in sync with this (compares against the same buffered window).
  */
 async function syncReservationToCalendarBestEffort(reservationId: string): Promise<void> {
   const reservation = await prisma.reservation.findUnique({
@@ -58,18 +66,20 @@ async function syncReservationToCalendarBestEffort(reservationId: string): Promi
     return;
   }
 
+  const { occupiedStart, occupiedEnd } = getOccupiedRange(reservation.startAt, reservation.endAt);
+
   const calendarService = getCalendarService();
   const result = reservation.googleEventId
     ? await calendarService.updateEvent(calendarId, reservation.googleEventId, {
         staffDisplayName: reservation.staff.displayName,
-        startAt: reservation.startAt,
-        endAt: reservation.endAt,
+        startAt: occupiedStart,
+        endAt: occupiedEnd,
       })
     : await calendarService.createEvent(calendarId, {
         reservationId: reservation.id,
         staffDisplayName: reservation.staff.displayName,
-        startAt: reservation.startAt,
-        endAt: reservation.endAt,
+        startAt: occupiedStart,
+        endAt: occupiedEnd,
       });
 
   if (result.ok) {
@@ -174,7 +184,7 @@ export async function createReservation(rawInput: CreateReservationInput): Promi
   if (!roomId) return { ok: false, reason: "ROOM_NOT_FOUND" };
 
   const startAt = new Date(input.startAtUtcIso);
-  const endAt = new Date(startAt.getTime() + APPOINTMENT_DURATION_MS);
+  const endAt = new Date(startAt.getTime() + SERVICE_DURATION_MS);
 
   // The reservation's contact snapshot: an explicit override, else whatever
   // customer record is actually being used (existing or freshly upserted).
@@ -257,12 +267,19 @@ export async function rescheduleReservation(rawInput: RescheduleReservationInput
   if (!existing) return { ok: false, reason: "NOT_FOUND" };
   if (existing.status !== "CONFIRMED") return { ok: false, reason: "ALREADY_CANCELLED" };
 
+  // The reservation's own Google event is synced at its BUFFERED occupied
+  // window (see syncReservationToCalendarBestEffort), not its raw actual
+  // startAt/endAt - so the self-exclusion filter here must match that same
+  // buffered window, or a reschedule landing near the old time would falsely
+  // read its own still-existing Calendar event back as CALENDAR_BUSY.
+  const existingOccupied = getOccupiedRange(existing.startAt, existing.endAt);
+
   const validation = await validateSlotBookable(
     {
       staffId: existing.staffId,
       startAtUtcIso: input.newStartAtUtcIso,
       excludeReservationId: existing.id,
-      excludeCalendarBusyInterval: { start: existing.startAt, end: existing.endAt },
+      excludeCalendarBusyInterval: { start: existingOccupied.occupiedStart, end: existingOccupied.occupiedEnd },
     },
     prismaAvailabilityDeps,
   );
@@ -272,7 +289,7 @@ export async function rescheduleReservation(rawInput: RescheduleReservationInput
   }
 
   const newStartAt = new Date(input.newStartAtUtcIso);
-  const newEndAt = new Date(newStartAt.getTime() + APPOINTMENT_DURATION_MS);
+  const newEndAt = new Date(newStartAt.getTime() + SERVICE_DURATION_MS);
 
   try {
     await prisma.reservation.update({
@@ -296,6 +313,37 @@ export async function rescheduleReservation(rawInput: RescheduleReservationInput
 
 export type CancelReservationResult = { ok: true } | { ok: false; reason: "NOT_FOUND" | "ALREADY_CANCELLED" };
 
+/**
+ * Best-effort Calendar event deletion after a reservation is cancelled.
+ * Mirrors syncReservationToCalendarBestEffort's failure handling so a delete
+ * that fails (Google unreachable, event already gone, etc.) is recorded on
+ * the reservation row (googleSyncStatus/googleSyncError) instead of being
+ * silently discarded - DB cancellation state is unaffected either way, but
+ * staff can now see the error badge and retry via
+ * resyncReservationCalendarEvent instead of a stale event lingering on the
+ * calendar unnoticed. Never throws.
+ */
+async function deleteCalendarEventBestEffort(reservationId: string, googleEventId: string | null, roomId: string): Promise<void> {
+  if (!googleEventId) return;
+
+  const calendarId = await resolveRoomCalendarId(roomId);
+  if (!calendarId) return;
+
+  const result = await getCalendarService().deleteEvent(calendarId, googleEventId);
+
+  if (result.ok) {
+    await prisma.reservation.update({
+      where: { id: reservationId },
+      data: { googleEventId: null, googleSyncStatus: "SYNCED", googleSyncError: null },
+    });
+  } else {
+    await prisma.reservation.update({
+      where: { id: reservationId },
+      data: { googleSyncStatus: "FAILED", googleSyncError: result.error.slice(0, 500) },
+    });
+  }
+}
+
 export async function cancelReservation(reservationId: string, cancelledByStaffId: string): Promise<CancelReservationResult> {
   const existing = await prisma.reservation.findUnique({ where: { id: reservationId } });
   if (!existing) return { ok: false, reason: "NOT_FOUND" };
@@ -306,28 +354,29 @@ export async function cancelReservation(reservationId: string, cancelledByStaffI
     data: { status: "CANCELLED", cancelledAt: new Date(), cancelledByStaffId },
   });
 
-  if (existing.googleEventId) {
-    const calendarId = await resolveRoomCalendarId(existing.roomId);
-    if (calendarId) {
-      await getCalendarService()
-        .deleteEvent(calendarId, existing.googleEventId)
-        .catch(() => {
-          // Best-effort: DB is the source of truth for cancellation regardless of Google's state.
-        });
-    }
-  }
+  await deleteCalendarEventBestEffort(reservationId, existing.googleEventId, existing.roomId).catch((err) =>
+    console.error(`calendar delete failed for reservation ${reservationId}`, err),
+  );
 
   return { ok: true };
 }
 
 /**
  * Manual retry for a reservation whose Calendar sync previously failed
- * (googleSyncStatus = FAILED). Staff-triggered in Phase 1; a future background
- * job would call this same function across all FAILED rows.
+ * (googleSyncStatus = FAILED) - for a still-CONFIRMED reservation this retries
+ * the create/update, for a CANCELLED one it retries the event deletion.
+ * Staff-triggered in Phase 1; a future background job would call this same
+ * function across all FAILED rows.
  */
 export async function resyncReservationCalendarEvent(reservationId: string): Promise<{ ok: true } | { ok: false; reason: "NOT_FOUND" }> {
   const existing = await prisma.reservation.findUnique({ where: { id: reservationId } });
   if (!existing) return { ok: false, reason: "NOT_FOUND" };
-  await syncReservationToCalendarBestEffort(reservationId);
+
+  if (existing.status === "CANCELLED") {
+    await deleteCalendarEventBestEffort(reservationId, existing.googleEventId, existing.roomId);
+  } else {
+    await syncReservationToCalendarBestEffort(reservationId);
+  }
+
   return { ok: true };
 }

@@ -5,6 +5,7 @@ import {
   overlapsAnyInterval,
   generateCandidateStarts,
   resolveEffectiveRanges,
+  getOccupiedRange,
 } from "./rules";
 import type {
   CandidateBookableResult,
@@ -12,7 +13,17 @@ import type {
   StaffAvailabilityConfig,
   Weekday,
 } from "./types";
-import { APPOINTMENT_DURATION_MINUTES, SALON_TIME_ZONE, SLOT_STEP_MINUTES } from "./types";
+import { MAX_RESERVATION_QUERY_PADDING_MINUTES, SALON_TIME_ZONE, SERVICE_DURATION_MINUTES, SLOT_STEP_MINUTES } from "./types";
+
+/** Buffers every reservation's raw stored [start,end) into its occupied
+ *  [occupiedStart,occupiedEnd) window - conflict checks against other
+ *  reservations must compare occupied ranges on both sides, never raw ones. */
+function bufferReservations(reservations: InstantRange[]): InstantRange[] {
+  return reservations.map((r) => {
+    const { occupiedStart, occupiedEnd } = getOccupiedRange(r.start, r.end);
+    return { start: occupiedStart, end: occupiedEnd };
+  });
+}
 
 /**
  * Data access this engine needs, injected by the caller. Real implementations
@@ -53,15 +64,24 @@ function toWeekday(dt: DateTime): Weekday {
   return (dt.weekday % 7) as Weekday;
 }
 
-/** Any candidate's 90-minute span can spill into the neighboring calendar day. */
+/** Any candidate's buffered occupied window can spill into the neighboring calendar day. */
 function widenedDayQueryWindow(dayStartJst: DateTime): { rangeStart: Date; rangeEnd: Date } {
   const dayEndJst = dayStartJst.plus({ days: 1 });
   return {
-    rangeStart: dayStartJst.minus({ minutes: APPOINTMENT_DURATION_MINUTES }).toJSDate(),
-    rangeEnd: dayEndJst.plus({ minutes: APPOINTMENT_DURATION_MINUTES }).toJSDate(),
+    rangeStart: dayStartJst.minus({ minutes: MAX_RESERVATION_QUERY_PADDING_MINUTES }).toJSDate(),
+    rangeEnd: dayEndJst.plus({ minutes: MAX_RESERVATION_QUERY_PADDING_MINUTES }).toJSDate(),
   };
 }
 
+/**
+ * `roomReservations` must already be buffered (occupied ranges, not raw
+ * stored [start,end) values) by the time it reaches this function - see
+ * bufferReservations, applied once by each caller right after fetching. This
+ * keeps every conflict decision in this file operating on occupied ranges
+ * uniformly, while business-hours checking below stays on the raw candidate
+ * window (only the actual service time needs to fit inside business hours,
+ * per plan - not the buffer either side of it).
+ */
 function isCandidateBookable(
   candidateStart: DateTime,
   candidateEnd: DateTime,
@@ -87,20 +107,25 @@ function isCandidateBookable(
 
   const startMinute = candidateStart.hour * 60 + candidateStart.minute;
   const withinHours = effectiveRanges.some(
-    (range) => startMinute >= range.startMinute && startMinute + APPOINTMENT_DURATION_MINUTES <= range.endMinute,
+    (range) => startMinute >= range.startMinute && startMinute + SERVICE_DURATION_MINUTES <= range.endMinute,
   );
   if (!withinHours) return { ok: false, reason: "OUT_OF_HOURS" };
 
   const startJs = candidateStart.toJSDate();
   const endJs = candidateEnd.toJSDate();
+  const { occupiedStart, occupiedEnd } = getOccupiedRange(startJs, endJs);
 
   if (isPastCutoff(candidateStart, now, config.cutoff)) return { ok: false, reason: "PAST_CUTOFF" };
   if (!isWithinBookingWindow(dateISO, now.setZone(SALON_TIME_ZONE), config.bookingWindowDays)) {
     return { ok: false, reason: "OUT_OF_WINDOW" };
   }
-  if (overlapsAnyInterval(startJs, endJs, roomReservations)) return { ok: false, reason: "ROOM_CONFLICT" };
+  // Room/Calendar conflicts use the buffered occupied window - business hours
+  // above deliberately did not. calendarBusy is compared unbuffered on its own
+  // side: only the candidate gets a buffer against a Google interval (whether
+  // genuinely external or this app's own already-buffered synced event).
+  if (overlapsAnyInterval(occupiedStart, occupiedEnd, roomReservations)) return { ok: false, reason: "ROOM_CONFLICT" };
   if (calendarBusy === null) return { ok: false, reason: "CALENDAR_UNAVAILABLE" };
-  if (overlapsAnyInterval(startJs, endJs, calendarBusy)) return { ok: false, reason: "CALENDAR_BUSY" };
+  if (overlapsAnyInterval(occupiedStart, occupiedEnd, calendarBusy)) return { ok: false, reason: "CALENDAR_BUSY" };
 
   return { ok: true };
 }
@@ -126,11 +151,11 @@ function forEachBookableCandidate(
   const weekday = toWeekday(dayStartJst);
   const override = config.overridesByDate.get(dateISO);
   const effectiveRanges = resolveEffectiveRanges(weekday, config.weekly, override);
-  const candidateStarts = generateCandidateStarts(effectiveRanges, APPOINTMENT_DURATION_MINUTES, SLOT_STEP_MINUTES);
+  const candidateStarts = generateCandidateStarts(effectiveRanges, SERVICE_DURATION_MINUTES, SLOT_STEP_MINUTES);
 
   for (const startMinute of candidateStarts) {
     const candidateStart = dayStartJst.plus({ minutes: startMinute });
-    const candidateEnd = candidateStart.plus({ minutes: APPOINTMENT_DURATION_MINUTES });
+    const candidateEnd = candidateStart.plus({ minutes: SERVICE_DURATION_MINUTES });
     const result = isCandidateBookable(candidateStart, candidateEnd, config, roomReservations, calendarBusy, now);
     if (result.ok && onBookable(candidateStart)) return;
   }
@@ -180,6 +205,8 @@ export async function computeAvailableSlots(
   ]);
   if (!calendarResult.ok) return { ok: false, reason: "CALENDAR_UNAVAILABLE" };
 
+  const occupiedRoomReservations = bufferReservations(roomReservations);
+
   const exclude = params.excludeCalendarBusyInterval;
   const calendarBusy = exclude
     ? calendarResult.busy.filter(
@@ -188,7 +215,7 @@ export async function computeAvailableSlots(
     : calendarResult.busy;
 
   const slots: string[] = [];
-  forEachBookableCandidate(dayStartJst, params.dateISO, config, roomReservations, calendarBusy, now, (candidateStart) => {
+  forEachBookableCandidate(dayStartJst, params.dateISO, config, occupiedRoomReservations, calendarBusy, now, (candidateStart) => {
     slots.push(candidateStart.toUTC().toISO()!);
     return false;
   });
@@ -241,7 +268,7 @@ export async function validateSlotBookable(
   // Parsing startAtUtcIso doesn't depend on config/roomId - done first purely
   // so its date can bound the ScheduleOverride lookup below (no DB access here).
   const candidateStart = DateTime.fromISO(params.startAtUtcIso, { zone: "utc" }).setZone(SALON_TIME_ZONE);
-  const candidateEnd = candidateStart.plus({ minutes: APPOINTMENT_DURATION_MINUTES });
+  const candidateEnd = candidateStart.plus({ minutes: SERVICE_DURATION_MINUTES });
   // A malformed startAtUtcIso (e.g. a forged request) yields an invalid
   // DateTime here - isCandidateBookable's own check below is what actually
   // rejects it (INVALID_START_TIME); this fallback only keeps the override
@@ -258,13 +285,15 @@ export async function validateSlotBookable(
   if (!config.active) return { ok: false, reason: "STAFF_INACTIVE" };
   if (!roomId) return { ok: false, reason: "ROOM_NOT_FOUND" };
 
-  const rangeStart = candidateStart.minus({ minutes: APPOINTMENT_DURATION_MINUTES }).toJSDate();
-  const rangeEnd = candidateEnd.plus({ minutes: APPOINTMENT_DURATION_MINUTES }).toJSDate();
+  const rangeStart = candidateStart.minus({ minutes: MAX_RESERVATION_QUERY_PADDING_MINUTES }).toJSDate();
+  const rangeEnd = candidateEnd.plus({ minutes: MAX_RESERVATION_QUERY_PADDING_MINUTES }).toJSDate();
 
   const [roomReservations, calendarResult] = await Promise.all([
     deps.loadRoomReservations(roomId, rangeStart, rangeEnd, params.excludeReservationId),
     deps.loadCalendarBusy(roomId, rangeStart, rangeEnd),
   ]);
+
+  const occupiedRoomReservations = bufferReservations(roomReservations);
 
   const exclude = params.excludeCalendarBusyInterval;
   const calendarBusy =
@@ -276,7 +305,7 @@ export async function validateSlotBookable(
         ? calendarResult.busy
         : null;
 
-  return isCandidateBookable(candidateStart, candidateEnd, config, roomReservations, calendarBusy, now);
+  return isCandidateBookable(candidateStart, candidateEnd, config, occupiedRoomReservations, calendarBusy, now);
 }
 
 /**
@@ -353,7 +382,7 @@ export async function computeAvailabilityForRange(
     dateISO: dayStartJst.toISODate()!,
     ...widenedDayQueryWindow(dayStartJst),
   }));
-  const reservationsByDay = bucketIntervalsByDay(roomReservations, dayWindows);
+  const reservationsByDay = bucketIntervalsByDay(bufferReservations(roomReservations), dayWindows);
   const busyByDay = bucketIntervalsByDay(calendarResult.busy, dayWindows);
 
   const days = dayStarts.map((dayStartJst, i) => {

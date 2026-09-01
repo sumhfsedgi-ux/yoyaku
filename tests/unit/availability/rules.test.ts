@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { DateTime } from "luxon";
 import {
   generateCandidateStarts,
+  getOccupiedRange,
   intervalsOverlap,
   isPastCutoff,
   isWithinBookingWindow,
   resolveEffectiveRanges,
 } from "@/lib/availability/rules";
-import { SALON_TIME_ZONE } from "@/lib/availability/types";
+import { SALON_TIME_ZONE, SERVICE_DURATION_MINUTES } from "@/lib/availability/types";
 
 function jst(iso: string): Date {
   return DateTime.fromISO(iso, { zone: SALON_TIME_ZONE }).toJSDate();
@@ -87,24 +88,42 @@ describe("resolveEffectiveRanges", () => {
 });
 
 describe("generateCandidateStarts", () => {
-  it("produces every 15-minute start that leaves room for a full 90-minute appointment", () => {
+  it("produces every 15-minute start that leaves room for a full 60-minute appointment", () => {
     const ranges = [{ startMinute: 10 * 60, endMinute: 12 * 60 }]; // 10:00-12:00
-    const starts = generateCandidateStarts(ranges, 90, 15);
-    // last bookable start is 10:30 (10:30-12:00); 10:45 would end at 12:15, out of range
-    expect(starts).toEqual([600, 615, 630]);
+    const starts = generateCandidateStarts(ranges, SERVICE_DURATION_MINUTES, 15);
+    // last bookable start is 11:00 (11:00-12:00); 11:15 would end at 12:15, out of range
+    expect(starts).toEqual([600, 615, 630, 645, 660]);
   });
 
   it("a range shorter than the appointment duration produces no candidates", () => {
-    const ranges = [{ startMinute: 10 * 60, endMinute: 10 * 60 + 60 }]; // 60 minutes, need 90
-    expect(generateCandidateStarts(ranges, 90, 15)).toEqual([]);
+    const ranges = [{ startMinute: 10 * 60, endMinute: 10 * 60 + 45 }]; // 45 minutes, need 60
+    expect(generateCandidateStarts(ranges, SERVICE_DURATION_MINUTES, 15)).toEqual([]);
   });
 
   it("split shifts (multiple ranges same day) each contribute their own candidates", () => {
     const ranges = [
-      { startMinute: 10 * 60, endMinute: 10 * 60 + 90 }, // exactly one 90-min slot
-      { startMinute: 15 * 60, endMinute: 15 * 60 + 90 },
+      { startMinute: 10 * 60, endMinute: 10 * 60 + 60 }, // exactly one 60-min slot
+      { startMinute: 15 * 60, endMinute: 15 * 60 + 60 },
     ];
-    expect(generateCandidateStarts(ranges, 90, 15)).toEqual([600, 900]);
+    expect(generateCandidateStarts(ranges, SERVICE_DURATION_MINUTES, 15)).toEqual([600, 900]);
+  });
+});
+
+describe("getOccupiedRange (60min service + 15min buffer before/after)", () => {
+  it("adds a 15-minute buffer before start and after end", () => {
+    const { occupiedStart, occupiedEnd } = getOccupiedRange(jst("2026-08-30T14:00"), jst("2026-08-30T15:00"));
+    expect(occupiedStart).toEqual(jst("2026-08-30T13:45"));
+    expect(occupiedEnd).toEqual(jst("2026-08-30T15:15"));
+  });
+
+  it("the spec's worked example: next bookable start after a 14:00-15:00 appointment is 15:30", () => {
+    const existing = getOccupiedRange(jst("2026-08-30T14:00"), jst("2026-08-30T15:00")); // occupied 13:45-15:15
+
+    const candidate1515 = getOccupiedRange(jst("2026-08-30T15:15"), jst("2026-08-30T16:15")); // occupied 15:00-16:30
+    expect(intervalsOverlap(candidate1515.occupiedStart, candidate1515.occupiedEnd, existing.occupiedStart, existing.occupiedEnd)).toBe(true);
+
+    const candidate1530 = getOccupiedRange(jst("2026-08-30T15:30"), jst("2026-08-30T16:30")); // occupied 15:15-16:45
+    expect(intervalsOverlap(candidate1530.occupiedStart, candidate1530.occupiedEnd, existing.occupiedStart, existing.occupiedEnd)).toBe(false);
   });
 });
 

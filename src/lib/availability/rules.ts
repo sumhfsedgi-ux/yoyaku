@@ -1,5 +1,6 @@
 import type { DateTime } from "luxon";
 import type { CutoffConfig, InstantRange, MinuteRange, OverrideRule, Weekday, WeeklyRule } from "./types";
+import { RESERVATION_BUFFER_AFTER_MINUTES, RESERVATION_BUFFER_BEFORE_MINUTES } from "./types";
 
 /**
  * Pure, dependency-free rule functions for the availability engine. No I/O, no
@@ -45,6 +46,19 @@ export function intervalsOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: D
 
 export function overlapsAnyInterval(start: Date, end: Date, intervals: InstantRange[]): boolean {
   return intervals.some((interval) => intervalsOverlap(start, end, interval.start, interval.end));
+}
+
+/**
+ * A reservation's real occupied span in the shared room: setup buffer before,
+ * the actual service, cleanup buffer after. Conflict-detection only - never
+ * persisted (Reservation.startAt/endAt always hold the raw actual service
+ * time, not this).
+ */
+export function getOccupiedRange(start: Date, end: Date): { occupiedStart: Date; occupiedEnd: Date } {
+  return {
+    occupiedStart: new Date(start.getTime() - RESERVATION_BUFFER_BEFORE_MINUTES * 60_000),
+    occupiedEnd: new Date(end.getTime() + RESERVATION_BUFFER_AFTER_MINUTES * 60_000),
+  };
 }
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;

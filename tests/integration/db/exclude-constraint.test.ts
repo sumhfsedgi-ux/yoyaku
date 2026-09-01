@@ -26,7 +26,7 @@ describe("Reservation EXCLUDE constraint (spec case 8: concurrent booking race)"
         staffId: staffA.id,
         customerId: customerA.id,
         startAt: new Date("2026-08-30T04:00:00.000Z"), // 13:00 JST
-        endAt: new Date("2026-08-30T05:30:00.000Z"), // 14:30 JST
+        endAt: new Date("2026-08-30T05:00:00.000Z"), // 14:00 JST (60-minute actual service)
         status: "CONFIRMED",
         source: "CUSTOMER_ONLINE",
       },
@@ -40,7 +40,7 @@ describe("Reservation EXCLUDE constraint (spec case 8: concurrent booking race)"
           staffId: staffB.id,
           customerId: customerB.id,
           startAt: new Date("2026-08-30T04:15:00.000Z"), // 13:15 JST, overlaps
-          endAt: new Date("2026-08-30T05:45:00.000Z"),
+          endAt: new Date("2026-08-30T05:15:00.000Z"),
           status: "CONFIRMED",
           source: "CUSTOMER_ONLINE",
         },
@@ -69,7 +69,7 @@ describe("Reservation EXCLUDE constraint (spec case 8: concurrent booking race)"
           staffId,
           customerId,
           startAt: new Date("2026-08-30T04:00:00.000Z"),
-          endAt: new Date("2026-08-30T05:30:00.000Z"),
+          endAt: new Date("2026-08-30T05:00:00.000Z"),
           status: "CONFIRMED",
           source: "CUSTOMER_ONLINE",
         },
@@ -85,31 +85,34 @@ describe("Reservation EXCLUDE constraint (spec case 8: concurrent booking race)"
     expect(remaining).toHaveLength(1);
   });
 
-  it("non-overlapping concurrent INSERTs (adjacent, half-open boundary) both succeed", async () => {
+  it("non-overlapping concurrent INSERTs (adjacent BUFFERED occupied windows, half-open boundary) both succeed", async () => {
     const room = await seedRoom();
     const staffA = await seedStaff({ displayName: "スタッフA", bookingSlug: "case8b-a", loginEmail: "case8b-a@example.com" });
     const staffB = await seedStaff({ displayName: "スタッフB", bookingSlug: "case8b-b", loginEmail: "case8b-b@example.com" });
     const customerA = await seedCustomer(staffA.id);
     const customerB = await seedCustomer(staffB.id);
 
+    // 13:00-14:00 JST actual service -> occupied [12:45,14:15).
     const first = prisma.reservation.create({
       data: {
         roomId: room.id,
         staffId: staffA.id,
         customerId: customerA.id,
-        startAt: new Date("2026-08-30T04:00:00.000Z"), // 13:00-14:30 JST
-        endAt: new Date("2026-08-30T05:30:00.000Z"),
+        startAt: new Date("2026-08-30T04:00:00.000Z"),
+        endAt: new Date("2026-08-30T05:00:00.000Z"),
         status: "CONFIRMED",
         source: "CUSTOMER_ONLINE",
       },
     });
+    // 14:30-15:30 JST actual service -> occupied [14:15,15:45), touches the
+    // first reservation's occupied window exactly at 14:15 - not an overlap.
     const second = prisma.reservation.create({
       data: {
         roomId: room.id,
         staffId: staffB.id,
         customerId: customerB.id,
-        startAt: new Date("2026-08-30T05:30:00.000Z"), // 14:30-16:00 JST, adjacent
-        endAt: new Date("2026-08-30T07:00:00.000Z"),
+        startAt: new Date("2026-08-30T05:30:00.000Z"),
+        endAt: new Date("2026-08-30T06:30:00.000Z"),
         status: "CONFIRMED",
         source: "CUSTOMER_ONLINE",
       },
@@ -117,6 +120,60 @@ describe("Reservation EXCLUDE constraint (spec case 8: concurrent booking race)"
 
     const results = await Promise.allSettled([first, second]);
     expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+  });
+
+  it("the spec's worked example: after a 14:00-15:00 reservation, 15:15 conflicts but 15:30 is bookable", async () => {
+    const room = await seedRoom();
+    const staffA = await seedStaff({ displayName: "スタッフA", bookingSlug: "case8e-a", loginEmail: "case8e-a@example.com" });
+    const staffB = await seedStaff({ displayName: "スタッフB", bookingSlug: "case8e-b", loginEmail: "case8e-b@example.com" });
+    const staffC = await seedStaff({ displayName: "スタッフC", bookingSlug: "case8e-c", loginEmail: "case8e-c@example.com" });
+    const customerA = await seedCustomer(staffA.id);
+    const customerB = await seedCustomer(staffB.id);
+    const customerC = await seedCustomer(staffC.id);
+
+    await prisma.reservation.create({
+      data: {
+        roomId: room.id,
+        staffId: staffA.id,
+        customerId: customerA.id,
+        startAt: new Date("2026-08-30T05:00:00.000Z"), // 14:00 JST
+        endAt: new Date("2026-08-30T06:00:00.000Z"), // 15:00 JST
+        status: "CONFIRMED",
+        source: "CUSTOMER_ONLINE",
+      },
+    });
+
+    // 15:15-16:15 JST -> occupied [15:00,16:30) overlaps the first reservation's
+    // occupied [13:45,15:15) at the 15:00-15:15 edge -> rejected.
+    await expect(
+      prisma.reservation.create({
+        data: {
+          roomId: room.id,
+          staffId: staffB.id,
+          customerId: customerB.id,
+          startAt: new Date("2026-08-30T06:15:00.000Z"),
+          endAt: new Date("2026-08-30T07:15:00.000Z"),
+          status: "CONFIRMED",
+          source: "CUSTOMER_ONLINE",
+        },
+      }),
+    ).rejects.toBeDefined();
+
+    // 15:30-16:30 JST -> occupied [15:15,16:45) only touches the first
+    // reservation's occupied window's end (15:15) -> succeeds.
+    await expect(
+      prisma.reservation.create({
+        data: {
+          roomId: room.id,
+          staffId: staffC.id,
+          customerId: customerC.id,
+          startAt: new Date("2026-08-30T06:30:00.000Z"),
+          endAt: new Date("2026-08-30T07:30:00.000Z"),
+          status: "CONFIRMED",
+          source: "CUSTOMER_ONLINE",
+        },
+      }),
+    ).resolves.toBeDefined();
   });
 
   it("a CANCELLED reservation does not block an overlapping CONFIRMED one (WHERE clause on the constraint)", async () => {
@@ -130,7 +187,7 @@ describe("Reservation EXCLUDE constraint (spec case 8: concurrent booking race)"
         staffId: staffA.id,
         customerId: customerA.id,
         startAt: new Date("2026-08-30T04:00:00.000Z"),
-        endAt: new Date("2026-08-30T05:30:00.000Z"),
+        endAt: new Date("2026-08-30T05:00:00.000Z"),
         status: "CANCELLED",
         source: "CUSTOMER_ONLINE",
       },
@@ -143,7 +200,7 @@ describe("Reservation EXCLUDE constraint (spec case 8: concurrent booking race)"
           staffId: staffA.id,
           customerId: customerA.id,
           startAt: new Date("2026-08-30T04:00:00.000Z"),
-          endAt: new Date("2026-08-30T05:30:00.000Z"),
+          endAt: new Date("2026-08-30T05:00:00.000Z"),
           status: "CONFIRMED",
           source: "CUSTOMER_ONLINE",
         },

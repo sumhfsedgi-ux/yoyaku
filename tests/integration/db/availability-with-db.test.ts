@@ -45,19 +45,19 @@ describe("computeAvailableSlots against a real Postgres-backed room (spec case 4
 
     const bResult = await createReservation({
       staffId: staffB.id,
-      startAtUtcIso: "2026-08-31T04:00:00.000Z", // 13:00 JST Monday
+      startAtUtcIso: "2026-09-07T04:00:00.000Z", // 13:00 JST Monday
       source: "CUSTOMER_ONLINE",
       customer: { name: "Bさんの客", email: "b-customer@example.com", phone: "090-0000-0003" },
     });
     expect(bResult.ok).toBe(true);
 
     const now = DateTime.fromISO("2026-08-24T09:00", { zone: SALON_TIME_ZONE });
-    const slotsForA = await computeAvailableSlots({ staffId: staffA.id, dateISO: "2026-08-31", now }, prismaAvailabilityDeps);
+    const slotsForA = await computeAvailableSlots({ staffId: staffA.id, dateISO: "2026-09-07", now }, prismaAvailabilityDeps);
 
     expect(slotsForA.ok).toBe(true);
     if (!slotsForA.ok) return;
-    const blockedStart = DateTime.fromISO("2026-08-31T13:00", { zone: SALON_TIME_ZONE }).toUTC().toISO();
-    const clearStart = DateTime.fromISO("2026-08-31T14:30", { zone: SALON_TIME_ZONE }).toUTC().toISO();
+    const blockedStart = DateTime.fromISO("2026-09-07T13:00", { zone: SALON_TIME_ZONE }).toUTC().toISO();
+    const clearStart = DateTime.fromISO("2026-09-07T14:30", { zone: SALON_TIME_ZONE }).toUTC().toISO();
     expect(slotsForA.slots).not.toContain(blockedStart);
     expect(slotsForA.slots).toContain(clearStart);
   });
@@ -82,25 +82,25 @@ describe("computeAvailableSlots against a real Postgres-backed room (spec case 4
       data: { staffId: staff.id, dayOfWeek: 1, startMinute: 10 * 60, endMinute: 19 * 60 },
     });
     // An override far outside every range queried below (10 years out) -
-    // must never affect a computation for 2026-08-31.
+    // must never affect a computation for 2026-09-07.
     await prisma.scheduleOverride.create({
       data: { staffId: staff.id, date: new Date("2036-08-31T00:00:00.000Z"), isClosed: true },
     });
 
     const now = DateTime.fromISO("2026-08-24T09:00", { zone: SALON_TIME_ZONE });
 
-    const singleDay = await computeAvailableSlots({ staffId: staff.id, dateISO: "2026-08-31", now }, prismaAvailabilityDeps);
+    const singleDay = await computeAvailableSlots({ staffId: staff.id, dateISO: "2026-09-07", now }, prismaAvailabilityDeps);
     expect(singleDay.ok).toBe(true);
     if (singleDay.ok) expect(singleDay.slots.length).toBeGreaterThan(0);
 
     const range = await computeAvailabilityForRange(
-      { staffId: staff.id, startDateISO: "2026-08-24", endDateISO: "2026-09-06", now },
+      { staffId: staff.id, startDateISO: "2026-08-31", endDateISO: "2026-09-13", now },
       prismaAvailabilityDeps,
     );
     expect(range.ok).toBe(true);
-    if (range.ok) expect(range.days.find((d) => d.dateISO === "2026-08-31")?.available).toBe(true);
+    if (range.ok) expect(range.days.find((d) => d.dateISO === "2026-09-07")?.available).toBe(true);
 
-    const startAtUtcIso = DateTime.fromISO("2026-08-31T11:00", { zone: SALON_TIME_ZONE }).toUTC().toISO()!;
+    const startAtUtcIso = DateTime.fromISO("2026-09-07T11:00", { zone: SALON_TIME_ZONE }).toUTC().toISO()!;
     const validation = await validateSlotBookable({ staffId: staff.id, startAtUtcIso, now }, prismaAvailabilityDeps);
     expect(validation).toEqual({ ok: true });
   });

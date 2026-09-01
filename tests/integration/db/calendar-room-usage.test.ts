@@ -182,7 +182,7 @@ describe("calendar room-usage: reservation-synced Google events are not duplicat
     await prisma.$disconnect();
   });
 
-  const MONDAY_START = "2026-08-31T04:00:00.000Z"; // 13:00 JST on a Monday
+  const MONDAY_START = "2026-09-07T04:00:00.000Z"; // 13:00 JST on a Monday
 
   async function seedBookableStaff(overrides: Parameters<typeof seedStaff>[0] = {}) {
     const staff = await seedStaff({
@@ -214,14 +214,14 @@ describe("calendar room-usage: reservation-synced Google events are not duplicat
     await sessionAs(staffA.id);
     const { getCalendarDayData, getCalendarMonthData } = await import("@/actions/calendar");
 
-    const dayEntries = await getCalendarDayData("2026-08-31", "room");
+    const dayEntries = await getCalendarDayData("2026-09-07", "room");
     expect(dayEntries).toHaveLength(1);
     expect(dayEntries[0].kind).toBe("reservation");
     expect(dayEntries.some((e) => e.kind === "googleBusy")).toBe(false);
 
-    const monthEntries = await getCalendarMonthData(2026, 8, "room");
-    expect(monthEntries["2026-08-31"]).toHaveLength(1);
-    expect(monthEntries["2026-08-31"][0].kind).toBe("reservation");
+    const monthEntries = await getCalendarMonthData(2026, 9, "room");
+    expect(monthEntries["2026-09-07"]).toHaveLength(1);
+    expect(monthEntries["2026-09-07"][0].kind).toBe("reservation");
   });
 
   it("a direct Google event that coincidentally has the exact same start/end as a reservation is still correctly identified as direct (not filtered by time match)", async () => {
@@ -239,15 +239,21 @@ describe("calendar room-usage: reservation-synced Google events are not duplicat
     expect(result.ok).toBe(true);
 
     // A second, genuinely separate event added directly in Google Calendar,
-    // at the EXACT same [start, end) as the reservation above - seedEvent
-    // stores it with reservationId: null, exactly like a real direct-added
-    // event. A time-range-matching dedup would have wrongly swallowed this
-    // too; the id-based check must still show it.
-    getFakeCalendarServiceForTests().seedEvent("primary", new Date(MONDAY_START), new Date("2026-08-31T05:30:00.000Z"));
+    // at the EXACT same [start, end) as the reservation's own synced event
+    // above (the BUFFERED occupied window - see
+    // syncReservationToCalendarBestEffort) - seedEvent stores it with
+    // reservationId: null, exactly like a real direct-added event. A
+    // time-range-matching dedup would have wrongly swallowed this too; the
+    // id-based check must still show it.
+    getFakeCalendarServiceForTests().seedEvent(
+      "primary",
+      new Date("2026-09-07T03:45:00.000Z"), // 12:45 JST
+      new Date("2026-09-07T05:15:00.000Z"), // 14:15 JST
+    );
 
     await sessionAs(staffA.id);
     const { getCalendarDayData } = await import("@/actions/calendar");
-    const dayEntries = await getCalendarDayData("2026-08-31", "room");
+    const dayEntries = await getCalendarDayData("2026-09-07", "room");
 
     expect(dayEntries).toHaveLength(2);
     const reservationEntries = dayEntries.filter((e) => e.kind === "reservation");

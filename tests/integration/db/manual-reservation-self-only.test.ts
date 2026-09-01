@@ -26,7 +26,7 @@ async function sessionAs(staffId: string) {
   } as never);
 }
 
-const MONDAY_START = "2026-08-31T04:00:00.000Z"; // 13:00 JST on a Monday
+const MONDAY_START = "2026-09-07T04:00:00.000Z"; // 13:00 JST on a Monday
 
 async function seedBookableStaff(overrides: Parameters<typeof seedStaff>[0] = {}) {
   const staff = await seedStaff({
@@ -124,7 +124,7 @@ describe("createManualReservation is always self-only", () => {
     await sessionAs(staffB.id);
     const { createManualReservation } = await import("@/actions/adminReservations");
     const staffBBooking = await createManualReservation({
-      startAtUtcIso: MONDAY_START, // 13:00-14:30 JST
+      startAtUtcIso: MONDAY_START, // 13:00-14:00 JST
       customerMode: "new",
       customer: { name: "スタッフBの客", email: "staffb-customer@example.com", phone: "090-2222-3333" },
     });

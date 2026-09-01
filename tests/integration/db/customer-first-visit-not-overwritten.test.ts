@@ -31,8 +31,8 @@ async function seedBookableStaff(overrides: Parameters<typeof seedStaff>[0] = {}
   return staff;
 }
 
-const MONDAY_1 = "2026-08-31T04:00:00.000Z"; // 13:00 JST Monday
-const MONDAY_2 = "2026-09-07T04:00:00.000Z"; // following Monday
+const MONDAY_1 = "2026-09-07T04:00:00.000Z"; // 13:00 JST Monday
+const MONDAY_2 = "2026-09-14T04:00:00.000Z"; // following Monday
 
 describe("Customer.firstVisitDate/firstVisitAcquisitionSourceId are never overwritten by a later booking or visit", () => {
   beforeEach(async () => {

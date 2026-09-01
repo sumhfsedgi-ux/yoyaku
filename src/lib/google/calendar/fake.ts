@@ -24,6 +24,7 @@ export class FakeCalendarService implements CalendarService {
   private events = new Map<string, FakeEvent>();
   private failNextCreate = false;
   private failNextUpdate = false;
+  private failNextDelete = false;
 
   seedEvent(calendarId: string, start: Date, end: Date): string {
     const id = `fake-evt-${randomUUID()}`;
@@ -45,11 +46,16 @@ export class FakeCalendarService implements CalendarService {
     this.failNextUpdate = true;
   }
 
+  simulateNextDeleteFailure() {
+    this.failNextDelete = true;
+  }
+
   /** Clears all seeded/created events. Call between tests - this instance is a module-level singleton (see ./factory.ts). */
   reset() {
     this.events.clear();
     this.failNextCreate = false;
     this.failNextUpdate = false;
+    this.failNextDelete = false;
   }
 
   async getFreeBusy(calendarId: string, rangeStart: Date, rangeEnd: Date) {
@@ -102,6 +108,10 @@ export class FakeCalendarService implements CalendarService {
   }
 
   async deleteEvent(_calendarId: string, googleEventId: string) {
+    if (this.failNextDelete) {
+      this.failNextDelete = false;
+      return { ok: false as const, error: "simulated deleteEvent failure" };
+    }
     this.events.delete(googleEventId);
     return { ok: true as const };
   }
