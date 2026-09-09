@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/db/prisma";
 import { requireStaffSession } from "@/lib/auth/session";
-import { bookingCutoffSchema, upsertScheduleOverrideInputSchema, weeklyAvailabilityRangeSchema } from "@/lib/validation/schemas";
+import { staffSettingsInputSchema, upsertScheduleOverrideInputSchema, weeklyAvailabilityRangeSchema } from "@/lib/validation/schemas";
 import type { z } from "zod";
 
 /**
@@ -111,7 +111,8 @@ export async function deleteMyScheduleOverride(dateISO: string) {
   await prisma.scheduleOverride.deleteMany({ where: { staffId: session.staffId, date } });
 }
 
-export interface MyBookingSettings {
+export interface MyReservationSettings {
+  salonName: string | null;
   bookingCutoffType: "HOURS_BEFORE" | "DAY_BEFORE_AT_TIME";
   bookingCutoffHours: number | null;
   bookingCutoffDaysBefore: number | null;
@@ -120,11 +121,12 @@ export interface MyBookingSettings {
   bookingSlug: string;
 }
 
-export async function getMyBookingSettings(): Promise<MyBookingSettings> {
+export async function getMyBookingSettings(): Promise<MyReservationSettings> {
   const session = await requireStaffSession();
   const staff = await prisma.staff.findUniqueOrThrow({
     where: { id: session.staffId },
     select: {
+      salonName: true,
       bookingCutoffType: true,
       bookingCutoffHours: true,
       bookingCutoffDaysBefore: true,
@@ -134,6 +136,7 @@ export async function getMyBookingSettings(): Promise<MyBookingSettings> {
     },
   });
   return {
+    salonName: staff.salonName,
     bookingCutoffType: staff.bookingCutoffType,
     bookingCutoffHours: staff.bookingCutoffHours,
     bookingCutoffDaysBefore: staff.bookingCutoffDaysBefore,
@@ -143,21 +146,34 @@ export async function getMyBookingSettings(): Promise<MyBookingSettings> {
   };
 }
 
+/**
+ * Saves salon name + booking cutoff + booking window together as ONE
+ * prisma.staff.update() call (all three live on the same Staff row) - the UI
+ * presents them as a single "予約設定を保存" action, and a single UPDATE
+ * statement is what makes that atomic: there is no way for salonName to save
+ * successfully while the cutoff silently fails (or vice versa).
+ */
 export async function updateMyBookingSettings(input: {
-  cutoff: z.infer<typeof bookingCutoffSchema>;
+  salonName: string;
+  cutoff: z.infer<typeof staffSettingsInputSchema>["bookingCutoff"];
   bookingWindowDays: number;
 }) {
   const session = await requireStaffSession();
-  const cutoff = bookingCutoffSchema.parse(input.cutoff);
+  const parsed = staffSettingsInputSchema.parse({
+    salonName: input.salonName,
+    bookingCutoff: input.cutoff,
+    bookingWindowDays: input.bookingWindowDays,
+  });
 
   await prisma.staff.update({
     where: { id: session.staffId },
     data: {
-      bookingCutoffType: cutoff.type,
-      bookingCutoffHours: cutoff.type === "HOURS_BEFORE" ? cutoff.hours : null,
-      bookingCutoffDaysBefore: cutoff.type === "DAY_BEFORE_AT_TIME" ? cutoff.daysBefore : null,
-      bookingCutoffAtMinute: cutoff.type === "DAY_BEFORE_AT_TIME" ? cutoff.atMinute : null,
-      bookingWindowDays: input.bookingWindowDays,
+      salonName: parsed.salonName.length > 0 ? parsed.salonName : null,
+      bookingCutoffType: parsed.bookingCutoff.type,
+      bookingCutoffHours: parsed.bookingCutoff.type === "HOURS_BEFORE" ? parsed.bookingCutoff.hours : null,
+      bookingCutoffDaysBefore: parsed.bookingCutoff.type === "DAY_BEFORE_AT_TIME" ? parsed.bookingCutoff.daysBefore : null,
+      bookingCutoffAtMinute: parsed.bookingCutoff.type === "DAY_BEFORE_AT_TIME" ? parsed.bookingCutoff.atMinute : null,
+      bookingWindowDays: parsed.bookingWindowDays,
     },
   });
 }

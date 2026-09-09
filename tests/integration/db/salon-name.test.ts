@@ -3,9 +3,13 @@ import { prisma } from "@/lib/db/prisma";
 import { resetDb, seedStaff } from "../../helpers/db";
 
 /**
- * salonName is per-staff, not a shared/global setting. updateMySalonName has
- * no targetStaffId param - it always resolves the row via requireStaffSession(),
- * same technique as manual-reservation-self-only.test.ts.
+ * salonName is per-staff, not a shared/global setting. It's saved together
+ * with booking cutoff/window as one atomic prisma.staff.update() via
+ * updateMyBookingSettings (see actions/schedule.ts) - the Settings UI merged
+ * what used to be a separate salon-name-only action into this single "予約設定
+ * を保存" action so the three fields can never partially save. Same
+ * requireStaffSession()-only, no-targetStaffId technique as
+ * manual-reservation-self-only.test.ts.
  */
 vi.mock("next-auth", () => ({ getServerSession: vi.fn() }));
 
@@ -18,7 +22,10 @@ async function sessionAs(staffId: string) {
   } as never);
 }
 
-describe("Per-staff salonName", () => {
+const CUTOFF = { type: "HOURS_BEFORE" as const, hours: 3 };
+const WINDOW_DAYS = 30;
+
+describe("Per-staff salonName (saved via the combined updateMyBookingSettings action)", () => {
   beforeEach(async () => {
     await resetDb();
   });
@@ -32,27 +39,27 @@ describe("Per-staff salonName", () => {
     const staffA = await seedStaff({ displayName: "スタッフA", bookingSlug: "salon-a", loginEmail: "salon-a@example.com" });
     const staffB = await seedStaff({ displayName: "スタッフB", bookingSlug: "salon-b", loginEmail: "salon-b@example.com" });
 
-    const { updateMySalonName, getMySalonName } = await import("@/actions/profile");
+    const { updateMyBookingSettings, getMyBookingSettings } = await import("@/actions/schedule");
 
     await sessionAs(staffA.id);
-    await updateMySalonName({ salonName: "腸もみサロン ゆきの" });
+    await updateMyBookingSettings({ salonName: "腸もみサロン ゆきの", cutoff: CUTOFF, bookingWindowDays: WINDOW_DAYS });
 
     await sessionAs(staffB.id);
-    await updateMySalonName({ salonName: "○○ Beauty Salon" });
+    await updateMyBookingSettings({ salonName: "○○ Beauty Salon", cutoff: CUTOFF, bookingWindowDays: WINDOW_DAYS });
 
     const rowA = await prisma.staff.findUniqueOrThrow({ where: { id: staffA.id } });
     const rowB = await prisma.staff.findUniqueOrThrow({ where: { id: staffB.id } });
     expect(rowA.salonName).toBe("腸もみサロン ゆきの");
     expect(rowB.salonName).toBe("○○ Beauty Salon");
 
-    // getMySalonName only ever returns the caller's own value.
+    // getMyBookingSettings only ever returns the caller's own value.
     await sessionAs(staffA.id);
-    expect(await getMySalonName()).toBe("腸もみサロン ゆきの");
+    expect((await getMyBookingSettings()).salonName).toBe("腸もみサロン ゆきの");
     await sessionAs(staffB.id);
-    expect(await getMySalonName()).toBe("○○ Beauty Salon");
+    expect((await getMyBookingSettings()).salonName).toBe("○○ Beauty Salon");
   });
 
-  it("staff A calling updateMySalonName can never touch staff B's row - there is no staffId param to forge", async () => {
+  it("staff A calling updateMyBookingSettings can never touch staff B's row - there is no staffId param to forge", async () => {
     const staffA = await seedStaff({ displayName: "スタッフA", bookingSlug: "salon-forge-a", loginEmail: "salon-forge-a@example.com" });
     const staffB = await seedStaff({
       displayName: "スタッフB",
@@ -62,8 +69,8 @@ describe("Per-staff salonName", () => {
     });
 
     await sessionAs(staffA.id);
-    const { updateMySalonName } = await import("@/actions/profile");
-    await updateMySalonName({ salonName: "乗っ取りサロン" });
+    const { updateMyBookingSettings } = await import("@/actions/schedule");
+    await updateMyBookingSettings({ salonName: "乗っ取りサロン", cutoff: CUTOFF, bookingWindowDays: WINDOW_DAYS });
 
     const rowB = await prisma.staff.findUniqueOrThrow({ where: { id: staffB.id } });
     expect(rowB.salonName).toBe("△△ Salon");
@@ -71,16 +78,35 @@ describe("Per-staff salonName", () => {
 
   it("unset salonName is null, not an empty string or placeholder, and saving an empty value clears it back to null", async () => {
     const staff = await seedStaff({ bookingSlug: "salon-unset", loginEmail: "salon-unset@example.com" });
-    const { getMySalonName, updateMySalonName } = await import("@/actions/profile");
+    const { getMyBookingSettings, updateMyBookingSettings } = await import("@/actions/schedule");
 
     await sessionAs(staff.id);
-    expect(await getMySalonName()).toBeNull();
+    expect((await getMyBookingSettings()).salonName).toBeNull();
 
-    await updateMySalonName({ salonName: "一時的な名前" });
-    expect(await getMySalonName()).toBe("一時的な名前");
+    await updateMyBookingSettings({ salonName: "一時的な名前", cutoff: CUTOFF, bookingWindowDays: WINDOW_DAYS });
+    expect((await getMyBookingSettings()).salonName).toBe("一時的な名前");
 
-    await updateMySalonName({ salonName: "" });
-    expect(await getMySalonName()).toBeNull();
+    await updateMyBookingSettings({ salonName: "", cutoff: CUTOFF, bookingWindowDays: WINDOW_DAYS });
+    expect((await getMyBookingSettings()).salonName).toBeNull();
+  });
+
+  it("saving salonName never silently drops the cutoff/window fields saved alongside it (single atomic update)", async () => {
+    const staff = await seedStaff({ bookingSlug: "salon-atomic", loginEmail: "salon-atomic@example.com" });
+    const { getMyBookingSettings, updateMyBookingSettings } = await import("@/actions/schedule");
+
+    await sessionAs(staff.id);
+    await updateMyBookingSettings({
+      salonName: "腸もみサロン ゆきの",
+      cutoff: { type: "DAY_BEFORE_AT_TIME", daysBefore: 2, atMinute: 18 * 60 },
+      bookingWindowDays: 45,
+    });
+
+    const settings = await getMyBookingSettings();
+    expect(settings.salonName).toBe("腸もみサロン ゆきの");
+    expect(settings.bookingCutoffType).toBe("DAY_BEFORE_AT_TIME");
+    expect(settings.bookingCutoffDaysBefore).toBe(2);
+    expect(settings.bookingCutoffAtMinute).toBe(18 * 60);
+    expect(settings.bookingWindowDays).toBe(45);
   });
 
   it("/reserve/[slug] lookup returns each staff's own salonName by bookingSlug", async () => {

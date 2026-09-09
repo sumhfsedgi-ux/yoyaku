@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { FOCUS_RING } from "@/lib/ui/interactionStyles";
-import { updateMyBookingSettings, type MyBookingSettings } from "@/actions/schedule";
+import { updateMyBookingSettings, type MyReservationSettings } from "@/actions/schedule";
 
 type CutoffType = "HOURS_BEFORE" | "DAY_BEFORE_AT_TIME";
 
@@ -16,13 +16,20 @@ function minuteToTimeValue(minute: number): string {
 }
 
 /**
+ * Salon name + booking cutoff + booking window are one save unit (they're
+ * all fields on the same Staff row, and updateMyBookingSettings writes them
+ * with a single UPDATE) - one primary "予約設定を保存" button at the bottom,
+ * not a save button per field. あなたの予約URL is display/copy only, not
+ * part of this save.
+ *
  * `initialSettings`/`bookingUrl` come from the server (see
  * app/(admin)/settings/page.tsx) so the first paint already shows the
  * staff's real settings - no client-side fetch-on-mount round trip. The URL
  * is built server-side from NEXTAUTH_URL rather than window.location.origin
  * so there's no client/server render mismatch to reconcile on hydration.
  */
-export function BookingSettingsForm({ initialSettings, bookingUrl }: { initialSettings: MyBookingSettings; bookingUrl: string }) {
+export function ReservationSettingsForm({ initialSettings, bookingUrl }: { initialSettings: MyReservationSettings; bookingUrl: string }) {
+  const [salonName, setSalonName] = useState(initialSettings.salonName ?? "");
   const [cutoffType, setCutoffType] = useState<CutoffType>(initialSettings.bookingCutoffType);
   const [hours, setHours] = useState(initialSettings.bookingCutoffHours ?? 3);
   const [daysBefore, setDaysBefore] = useState(initialSettings.bookingCutoffDaysBefore ?? 1);
@@ -39,7 +46,7 @@ export function BookingSettingsForm({ initialSettings, bookingUrl }: { initialSe
 
     startTransition(async () => {
       try {
-        await updateMyBookingSettings({ cutoff, bookingWindowDays: windowDays });
+        await updateMyBookingSettings({ salonName, cutoff, bookingWindowDays: windowDays });
         toast.success("予約設定を保存しました");
       } catch {
         toast.error("入力内容をご確認ください。");
@@ -58,6 +65,18 @@ export function BookingSettingsForm({ initialSettings, bookingUrl }: { initialSe
 
   return (
     <div className="flex flex-col gap-6">
+      <section className="rounded-xl border border-border bg-card p-4">
+        <p className="mb-1 text-sm font-semibold text-foreground">サロン名</p>
+        <p className="mb-3 text-xs text-muted-foreground">お客様の予約画面に表示されます</p>
+        <Input
+          id="salon-name"
+          value={salonName}
+          onChange={(e) => setSalonName(e.target.value)}
+          maxLength={100}
+          className="h-11 text-base"
+        />
+      </section>
+
       <section className="rounded-xl border border-border bg-card p-4">
         <p className="mb-3 text-sm font-semibold text-foreground">あなたの予約URL</p>
         <div className="flex items-center gap-2">
@@ -129,8 +148,8 @@ export function BookingSettingsForm({ initialSettings, bookingUrl }: { initialSe
         </div>
       </section>
 
-      <Button size="touch" disabled={isPending} onClick={handleSave}>
-        {isPending ? "保存中..." : "保存する"}
+      <Button size="touch" disabled={isPending} onClick={handleSave} className="self-end">
+        {isPending ? "保存中..." : "予約設定を保存"}
       </Button>
     </div>
   );

@@ -1,31 +1,38 @@
 import { describe, expect, it } from "vitest";
 import {
   createVisitRecordInputSchema,
-  updateMySalonNameInputSchema,
+  staffSettingsInputSchema,
   upsertScheduleOverrideInputSchema,
   VISIT_AMOUNT_MAX_YEN,
 } from "@/lib/validation/schemas";
 
-describe("updateMySalonNameInputSchema", () => {
+describe("staffSettingsInputSchema (salon name field)", () => {
+  const base = { bookingCutoff: { type: "HOURS_BEFORE" as const, hours: 3 }, bookingWindowDays: 30 };
+
   it("accepts a normal salon name and trims surrounding whitespace", () => {
-    const result = updateMySalonNameInputSchema.parse({ salonName: "  腸もみサロン ゆきの  " });
+    const result = staffSettingsInputSchema.parse({ ...base, salonName: "  腸もみサロン ゆきの  " });
     expect(result.salonName).toBe("腸もみサロン ゆきの");
   });
 
   it("accepts an empty string (used to clear the salon name)", () => {
-    const result = updateMySalonNameInputSchema.parse({ salonName: "" });
+    const result = staffSettingsInputSchema.parse({ ...base, salonName: "" });
     expect(result.salonName).toBe("");
   });
 
   it("accepts exactly 100 characters", () => {
     const salonName = "あ".repeat(100);
-    const result = updateMySalonNameInputSchema.parse({ salonName });
+    const result = staffSettingsInputSchema.parse({ ...base, salonName });
     expect(result.salonName).toHaveLength(100);
   });
 
   it("rejects more than 100 characters", () => {
     const salonName = "あ".repeat(101);
-    expect(() => updateMySalonNameInputSchema.parse({ salonName })).toThrow();
+    expect(() => staffSettingsInputSchema.parse({ ...base, salonName })).toThrow();
+  });
+
+  it("rejects bookingWindowDays outside 1-365", () => {
+    expect(() => staffSettingsInputSchema.parse({ ...base, salonName: "", bookingWindowDays: 0 })).toThrow();
+    expect(() => staffSettingsInputSchema.parse({ ...base, salonName: "", bookingWindowDays: 366 })).toThrow();
   });
 });
 

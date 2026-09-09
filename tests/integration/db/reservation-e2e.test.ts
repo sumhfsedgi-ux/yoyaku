@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { createReservation } from "@/lib/reservations/service";
 import { getFakeCalendarServiceForTests } from "@/lib/google/calendar/factory";
 import { getFakeGmailServiceForTests } from "@/lib/google/gmail/factory";
+import { EMAIL_TEMPLATE_SETTINGS_ID } from "@/lib/email/emailTemplateSettings";
 import { resetDb, seedRoom, seedStaff } from "../../helpers/db";
 
 const MONDAY_START = "2026-09-07T04:00:00.000Z"; // 13:00 JST on a Monday
@@ -77,9 +78,13 @@ describe("createReservation end-to-end (spec case 10: DB + Calendar + Gmail)", (
     const staffEmail = fakeGmail.sent.find((m) => m.to === staff.loginEmail);
     expect(customerEmail).toBeDefined();
     expect(staffEmail).toBeDefined();
-    // Customer email must show start time only, never the end time / duration.
+    // Customer email now shows the full start-end range via the default
+    // template's {{reservationDateTime}} tag - a deliberate policy change
+    // from the earlier "never reveal the end time" rule, per the reservation
+    // email template feature's explicit spec (a staff member can still write
+    // a template that omits it, using {{reservationDate}}+{{startTime}}).
     expect(customerEmail!.text).toContain("13:00");
-    expect(customerEmail!.text).not.toContain("14:00");
+    expect(customerEmail!.text).toContain("14:00");
     // Staff email is allowed to show the full range - the actual 60-minute
     // service time (13:00-14:00), not the buffered Calendar push window.
     expect(staffEmail!.text).toContain("13:00");
@@ -195,5 +200,150 @@ describe("createReservation end-to-end (spec case 10: DB + Calendar + Gmail)", (
     const staffAReservations = await prisma.reservation.findMany({ where: { staffId: staffA.id } });
     expect(staffAReservations).toHaveLength(2);
     expect(new Set(staffAReservations.map((r) => r.customerId)).size).toBe(1); // same Customer row reused
+  });
+
+  it("no EmailTemplateSettings row saved yet: customer email uses the default reservation confirmation template", async () => {
+    const room = await seedRoom();
+    await prisma.roomCalendar.create({ data: { roomId: room.id, googleCalendarId: "primary" } });
+    const staff = await seedBookableStaff();
+
+    const fakeGmail = getFakeGmailServiceForTests();
+    fakeGmail.sent = [];
+
+    await createReservation({
+      staffId: staff.id,
+      startAtUtcIso: MONDAY_START,
+      source: "CUSTOMER_ONLINE",
+      customer: { name: "山田花子", email: "default-tpl@example.com", phone: "090-1234-5678" },
+    });
+
+    const email = fakeGmail.sent.find((m) => m.to === "default-tpl@example.com");
+    expect(email!.text).toContain("山田花子 様");
+    expect(email!.text).toContain("東京都渋谷区東1-3-1 常盤松ロイアル706");
+    expect(email!.text).toContain("渋谷駅から徒歩8分");
+    expect(email!.text).toContain("https://maps.app.goo.gl/ZtDx6qirtUtmZJ9F8?g_st=ic");
+    // The Google Maps URL must be clickable in the HTML body.
+    expect(email!.html).toContain('<a href="https://maps.app.goo.gl/ZtDx6qirtUtmZJ9F8?g_st=ic"');
+  });
+
+  it("{{salonName}} resolves to each staff's own salonName, not a shared/global value", async () => {
+    const room = await seedRoom();
+    await prisma.roomCalendar.create({ data: { roomId: room.id, googleCalendarId: "primary" } });
+
+    const staffA = await seedStaff({
+      displayName: "スタッフA",
+      bookingSlug: "tpl-salon-a",
+      loginEmail: "tpl-salon-a@example.com",
+      bookingCutoffType: "HOURS_BEFORE",
+      bookingCutoffHours: 0,
+      bookingWindowDays: 365,
+      salonName: "腸もみサロン ゆきの",
+    });
+    await prisma.weeklyAvailability.create({ data: { staffId: staffA.id, dayOfWeek: 1, startMinute: 10 * 60, endMinute: 19 * 60 } });
+
+    const staffB = await seedStaff({
+      displayName: "スタッフB",
+      bookingSlug: "tpl-salon-b",
+      loginEmail: "tpl-salon-b@example.com",
+      bookingCutoffType: "HOURS_BEFORE",
+      bookingCutoffHours: 0,
+      bookingWindowDays: 365,
+      salonName: "○○ Beauty Salon",
+    });
+    await prisma.weeklyAvailability.create({ data: { staffId: staffB.id, dayOfWeek: 1, startMinute: 10 * 60, endMinute: 19 * 60 } });
+
+    const fakeGmail = getFakeGmailServiceForTests();
+    fakeGmail.sent = [];
+
+    await createReservation({
+      staffId: staffA.id,
+      startAtUtcIso: MONDAY_START,
+      source: "CUSTOMER_ONLINE",
+      customer: { name: "山田花子", email: "salon-a-customer@example.com", phone: "090-1234-5678" },
+    });
+    await createReservation({
+      staffId: staffB.id,
+      startAtUtcIso: "2026-09-07T07:00:00.000Z", // 16:00 JST, same day, clear of staffA's slot
+      source: "CUSTOMER_ONLINE",
+      customer: { name: "山田花子", email: "salon-b-customer@example.com", phone: "090-1234-5678" },
+    });
+
+    const emailA = fakeGmail.sent.find((m) => m.to === "salon-a-customer@example.com");
+    const emailB = fakeGmail.sent.find((m) => m.to === "salon-b-customer@example.com");
+    expect(emailA!.text).toContain("腸もみサロン ゆきの");
+    expect(emailB!.text).toContain("○○ Beauty Salon");
+  });
+
+  it("an invalid body stored directly in the DB (bypassing the Settings save validation) falls back to the default at send time", async () => {
+    const room = await seedRoom();
+    await prisma.roomCalendar.create({ data: { roomId: room.id, googleCalendarId: "primary" } });
+    const staff = await seedBookableStaff();
+
+    await prisma.emailTemplateSettings.create({
+      data: { id: EMAIL_TEMPLATE_SETTINGS_ID, reservationConfirmationBody: "{{customerName}} {{unknownTag}}" },
+    });
+
+    const fakeGmail = getFakeGmailServiceForTests();
+    fakeGmail.sent = [];
+
+    await createReservation({
+      staffId: staff.id,
+      startAtUtcIso: MONDAY_START,
+      source: "CUSTOMER_ONLINE",
+      customer: { name: "山田花子", email: "invalid-tpl@example.com", phone: "090-1234-5678" },
+    });
+
+    const email = fakeGmail.sent.find((m) => m.to === "invalid-tpl@example.com");
+    expect(email!.text).toContain("東京都渋谷区東1-3-1 常盤松ロイアル706"); // fell back to the default body
+    expect(email!.text).not.toContain("{{unknownTag}}");
+  });
+
+  it("a saved body containing an HTML tag is safely escaped in the HTML email, never a live tag", async () => {
+    const room = await seedRoom();
+    await prisma.roomCalendar.create({ data: { roomId: room.id, googleCalendarId: "primary" } });
+    const staff = await seedBookableStaff();
+
+    await prisma.emailTemplateSettings.create({
+      data: {
+        id: EMAIL_TEMPLATE_SETTINGS_ID,
+        reservationConfirmationBody: "{{customerName}} 様\n{{reservationDateTime}}\n1階です<script>alert(1)</script>",
+      },
+    });
+
+    const fakeGmail = getFakeGmailServiceForTests();
+    fakeGmail.sent = [];
+
+    await createReservation({
+      staffId: staff.id,
+      startAtUtcIso: MONDAY_START,
+      source: "CUSTOMER_ONLINE",
+      customer: { name: "山田花子", email: "xss-tpl@example.com", phone: "090-1234-5678" },
+    });
+
+    const email = fakeGmail.sent.find((m) => m.to === "xss-tpl@example.com");
+    expect(email!.html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(email!.html).not.toContain("<script>");
+  });
+
+  it("the staff notification email is completely unaffected by the reservation email template feature", async () => {
+    const room = await seedRoom();
+    await prisma.roomCalendar.create({ data: { roomId: room.id, googleCalendarId: "primary" } });
+    const staff = await seedBookableStaff();
+
+    const fakeGmail = getFakeGmailServiceForTests();
+    fakeGmail.sent = [];
+
+    await createReservation({
+      staffId: staff.id,
+      startAtUtcIso: MONDAY_START,
+      source: "CUSTOMER_ONLINE",
+      customer: { name: "山田花子", email: "staff-regression@example.com", phone: "090-1234-5678" },
+    });
+
+    const staffEmail = fakeGmail.sent.find((m) => m.to === staff.loginEmail);
+    expect(staffEmail!.text).toContain("新規予約が入りました。");
+    expect(staffEmail!.text).toContain("山田花子");
+    expect(staffEmail!.text).not.toContain("常盤松ロイアル");
+    expect(staffEmail!.text).not.toContain("Googleマップ");
   });
 });

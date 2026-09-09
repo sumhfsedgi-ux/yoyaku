@@ -16,14 +16,18 @@ export function dateToJst(date: Date): DateTime {
   return DateTime.fromJSDate(date, { zone: "utc" }).setZone(SALON_TIME_ZONE).setLocale("ja");
 }
 
-/**
- * Format a start time the way customer-facing copy should show it: JST date +
- * start time only, e.g. "8月30日 13:00〜". Never include the end time here - see
- * plan §18 (customer confirmation emails must not reveal the 90-minute duration).
- */
-export function formatStartTimeForCustomer(date: Date): string {
+/** Same weekday-label convention used by DateStrip/MonthGrid/ScheduleMonthPicker etc: index by Luxon's `weekday % 7` (0=Sun..6=Sat). */
+const WEEKDAY_JA = ["日", "月", "火", "水", "木", "金", "土"];
+
+/** JST date with weekday, e.g. "9月22日（火）" - used by the reservation email template's {{reservationDate}}/{{reservationDateTime}} tags. */
+export function formatReservationDateForCustomer(date: Date): string {
   const jst = dateToJst(date);
-  return `${jst.month}月${jst.day}日 ${jst.toFormat("HH:mm")}〜`;
+  return `${jst.month}月${jst.day}日（${WEEKDAY_JA[jst.weekday % 7]}）`;
+}
+
+/** JST clock time only, e.g. "18:00". */
+export function formatClockTime(date: Date): string {
+  return dateToJst(date).toFormat("HH:mm");
 }
 
 /** Full date + start-end range, for staff-facing copy where the duration is fine to show. */

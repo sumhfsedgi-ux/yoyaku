@@ -89,13 +89,15 @@ export const bookingCutoffSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
+/** Backs the single combined "予約設定を保存" action (salon name + cutoff + window) - see actions/schedule.ts's updateMyBookingSettings. */
 export const staffSettingsInputSchema = z.object({
+  salonName: z.string().trim().max(100),
   bookingCutoff: bookingCutoffSchema,
   bookingWindowDays: z.number().int().min(1).max(365),
 });
 
-export const updateMySalonNameInputSchema = z.object({
-  salonName: z.string().trim().max(100),
+export const reservationEmailTemplateInputSchema = z.object({
+  body: z.string().trim().min(1, "本文を入力してください").max(4000),
 });
 
 export const updateOwnCredentialsInputSchema = z

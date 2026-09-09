@@ -1,38 +1,29 @@
-import { formatRangeForStaff, formatStartTimeForCustomer } from "@/lib/time/tz";
+import { formatRangeForStaff } from "@/lib/time/tz";
+import { plainTextToHtml } from "@/lib/email/plainTextToHtml";
+import { renderReservationEmailTemplate, type ReservationEmailVariables } from "@/lib/email/reservationEmailTemplate";
 import type { SendEmailInput } from "./port";
 
+/** Fixed, not editable from Settings - only the body is (see actions/emailTemplateSettings.ts). */
+const RESERVATION_CONFIRMATION_SUBJECT = "【ご予約確定】ご予約ありがとうございます";
+
 /**
- * Customer confirmation email. Deliberately shows ONLY the start time (e.g.
- * "8月30日 13:00〜"), never the end time - the system tracks the full 90-minute
- * appointment internally, but that duration must never appear in customer-facing
- * copy (see plan §18).
+ * Customer confirmation email. `bodyTemplate` must already be resolved via
+ * getReservationConfirmationBodyForSending() (DB value, defensively
+ * re-validated, or the default) - this function only renders it, it doesn't
+ * know about Prisma/DB fallback.
  */
 export function buildCustomerConfirmationEmail(params: {
   to: string;
-  customerName: string;
-  staffDisplayName: string;
-  startAt: Date;
+  bodyTemplate: string;
+  variables: ReservationEmailVariables;
 }): SendEmailInput {
-  const when = formatStartTimeForCustomer(params.startAt);
-  const text = `${params.customerName} 様
-
-ご予約ありがとうございます。
-
-ご予約日時
-${when}
-
-ご予約を承りました。当日お待ちしております。`;
-
-  const html = `<p>${params.customerName} 様</p>
-<p>ご予約ありがとうございます。</p>
-<p><strong>ご予約日時</strong><br>${when}</p>
-<p>ご予約を承りました。当日お待ちしております。</p>`;
+  const text = renderReservationEmailTemplate(params.bodyTemplate, params.variables);
 
   return {
     to: params.to,
-    subject: "【ご予約確定】ご予約ありがとうございます",
+    subject: RESERVATION_CONFIRMATION_SUBJECT,
     text,
-    html,
+    html: plainTextToHtml(text),
   };
 }
 

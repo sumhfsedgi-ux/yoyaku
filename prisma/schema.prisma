@@ -372,6 +372,25 @@ model GoogleIntegration {
   @@map("GoogleCalendarIntegration")
 }
 
+/// Body of the customer-facing booking confirmation email (all staff share
+/// one template, edited via /settings) - NOT per-staff. Subject stays a fixed
+/// literal in code (see RESERVATION_CONFIRMATION_SUBJECT in
+/// src/lib/google/gmail/templates.ts), not editable here. Body is stored as
+/// plain text with {{tag}} placeholders - the allowed tag list, substitution,
+/// and save-time validation all live in
+/// src/lib/email/reservationEmailTemplate.ts; never string-concat this column
+/// directly elsewhere. Fixed id "main", same singleton convention as
+/// GoogleIntegration. A missing row, or a row whose body somehow fails
+/// validation (e.g. a hand-edited DB value), falls back to
+/// DEFAULT_RESERVATION_CONFIRMATION_BODY at send time - see
+/// src/lib/email/emailTemplateSettings.ts - so booking emails never break.
+model EmailTemplateSettings {
+  id                          String   @id
+  reservationConfirmationBody String
+  createdAt                   DateTime @default(now()) @db.Timestamptz
+  updatedAt                   DateTime @updatedAt @db.Timestamptz
+}
+
 /// DB-backed fixed-window rate limiting for public endpoints. Required because
 /// Vercel's serverless functions don't share process memory across invocations,
 /// so an in-memory limiter would not work in production.

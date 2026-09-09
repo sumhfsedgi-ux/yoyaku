@@ -29,6 +29,7 @@ export async function resetDb() {
   await prisma.staff.deleteMany();
   await prisma.room.deleteMany();
   await prisma.googleIntegration.deleteMany();
+  await prisma.emailTemplateSettings.deleteMany();
 }
 
 export async function seedRoom() {

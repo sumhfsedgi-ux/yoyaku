@@ -7,6 +7,8 @@ import { getCalendarService } from "@/lib/google/calendar/factory";
 import { getGmailService } from "@/lib/google/gmail/factory";
 import { resolveRoomCalendarId } from "@/lib/google/roomCalendar";
 import { buildCustomerConfirmationEmail, buildStaffNotificationEmail } from "@/lib/google/gmail/templates";
+import { getReservationConfirmationBodyForSending } from "@/lib/email/emailTemplateSettings";
+import { buildReservationEmailVariables } from "@/lib/email/reservationEmailTemplate";
 import { createReservationInputSchema, rescheduleReservationInputSchema } from "@/lib/validation/schemas";
 import { normalizePhoneDigits } from "@/lib/customers/normalize";
 import { isExclusionConstraintViolation } from "./errors";
@@ -96,10 +98,13 @@ async function syncReservationToCalendarBestEffort(reservationId: string): Promi
 }
 
 async function sendBookingNotificationsBestEffort(reservationId: string): Promise<void> {
-  const reservation = await prisma.reservation.findUnique({
-    where: { id: reservationId },
-    include: { staff: true, customer: true },
-  });
+  const [reservation, bodyTemplate] = await Promise.all([
+    prisma.reservation.findUnique({
+      where: { id: reservationId },
+      include: { staff: true, customer: true },
+    }),
+    getReservationConfirmationBodyForSending(),
+  ]);
   if (!reservation) return;
 
   // Prefer this reservation's own contact snapshot over the (possibly since-
@@ -122,9 +127,13 @@ async function sendBookingNotificationsBestEffort(reservationId: string): Promis
     .sendEmail(
       buildCustomerConfirmationEmail({
         to: contact.email,
-        customerName: contact.name,
-        staffDisplayName: reservation.staff.displayName,
-        startAt: reservation.startAt,
+        bodyTemplate,
+        variables: buildReservationEmailVariables({
+          customerName: contact.name,
+          startAt: reservation.startAt,
+          endAt: reservation.endAt,
+          salonName: reservation.staff.salonName,
+        }),
       }),
     )
     .catch((err) => console.error(`booking notification: customer confirmation email failed for reservation ${reservationId}`, err));
