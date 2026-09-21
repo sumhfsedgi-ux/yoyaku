@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db/prisma";
 import { getFakeCalendarServiceForTests } from "@/lib/google/calendar/factory";
 import { getFakeGmailServiceForTests } from "@/lib/google/gmail/factory";
+import { getFakeLineMessagingServiceForTests } from "@/lib/line/messaging/factory";
 import { normalizePhoneDigits } from "@/lib/customers/normalize";
 
 /**
@@ -14,10 +15,14 @@ import { normalizePhoneDigits } from "@/lib/customers/normalize";
 export async function resetDb() {
   getFakeCalendarServiceForTests().reset();
   getFakeGmailServiceForTests().reset();
+  getFakeLineMessagingServiceForTests().reset();
   await prisma.rateLimitHit.deleteMany();
   await prisma.retailSaleItem.deleteMany();
   await prisma.retailSale.deleteMany();
   await prisma.visitRecord.deleteMany();
+  // Must precede reservation.deleteMany() - ReservationNotification's FK to
+  // Reservation is ON DELETE RESTRICT (see prisma/schema.prisma).
+  await prisma.reservationNotification.deleteMany();
   await prisma.reservation.deleteMany();
   await prisma.customer.deleteMany();
   await prisma.scheduleOverrideRange.deleteMany();
@@ -30,6 +35,7 @@ export async function resetDb() {
   await prisma.room.deleteMany();
   await prisma.googleIntegration.deleteMany();
   await prisma.emailTemplateSettings.deleteMany();
+  await prisma.lineTemplateSettings.deleteMany();
 }
 
 export async function seedRoom() {

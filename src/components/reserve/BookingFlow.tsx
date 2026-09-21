@@ -36,12 +36,22 @@ export function BookingFlow({
   initialWindowStartISO,
   initialGridDays,
   initialGridError,
+  lineIdToken,
 }: {
   bookingSlug: string;
   bookingWindowDays: number;
   initialWindowStartISO: string;
   initialGridDays: TwoWeekDayStatus[];
   initialGridError: string | null;
+  /**
+   * Raw LIFF/LINE Login ID Token, only ever passed by app/reserve/liff/page.tsx
+   * (the plain /reserve/[slug] link never has one). Held in memory only -
+   * never persisted to a cookie/session - and included as-is in the final
+   * submission; the server verifies it fresh right before writing the
+   * reservation (see lib/line/identity.ts). Everything else about this flow
+   * (date/time selection, contact form) is unchanged.
+   */
+  lineIdToken?: string;
 }) {
   const [step, setStep] = useState<Step>(0);
   const [dateISO, setDateISO] = useState<string | null>(null);
@@ -152,6 +162,7 @@ export function BookingFlow({
         startAtUtcIso: selectedSlot,
         customer: { name: name.trim(), email: email.trim(), phone: phone.trim() },
         website,
+        lineIdToken,
       });
       if (!result.ok) {
         setSubmitError(result.reason);

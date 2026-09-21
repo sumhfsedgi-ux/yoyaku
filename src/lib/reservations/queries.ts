@@ -69,6 +69,8 @@ export interface ReservationDetail {
   googleSyncStatus: string;
   customerId: string;
   customer: { name: string; email: string; phone: string; firstVisitDate: Date | null };
+  /** LINE_CONFIRMATION/LINE_REMINDER send status, if either was ever attempted - see ReservationNotification. Empty when the customer has no linked LINE account. */
+  lineNotifications: { type: "LINE_CONFIRMATION" | "LINE_REMINDER"; status: "PENDING" | "SENT" | "FAILED" }[];
 }
 
 /**
@@ -102,6 +104,7 @@ export async function getReservationDetail(reservationId: string, viewerStaffId:
       customerPhoneSnapshot: true,
       staff: { select: { displayName: true } },
       customer: { select: { name: true, email: true, phone: true, firstVisitDate: true } },
+      notifications: { select: { type: true, status: true } },
     },
   });
 
@@ -124,6 +127,7 @@ export async function getReservationDetail(reservationId: string, viewerStaffId:
       phone: reservation.customerPhoneSnapshot ?? reservation.customer.phone,
       firstVisitDate: reservation.customer.firstVisitDate,
     },
+    lineNotifications: reservation.notifications,
   };
 }
 

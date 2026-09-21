@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { SearchIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 import { FOCUS_RING } from "@/lib/ui/interactionStyles";
@@ -52,7 +53,10 @@ export function CustomerListView({ customers }: { customers: CustomerListItem[] 
               )}
             >
               <div>
-                <p className="text-sm font-medium text-foreground">{customer.name}</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-sm font-medium text-foreground">{customer.name}</p>
+                  {customer.lineLinked && <Badge variant="secondary">LINE</Badge>}
+                </div>
                 <p className="text-xs text-muted-foreground">
                   初回来店: {customer.firstVisitDate ? dateToJst(customer.firstVisitDate).toFormat("yyyy年M月d日") : "未設定"}
                 </p>
