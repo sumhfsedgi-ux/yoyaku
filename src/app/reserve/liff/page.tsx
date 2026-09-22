@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import liff from "@line/liff";
 import { BookingFlow } from "@/components/reserve/BookingFlow";
 import { ErrorState } from "@/components/ui/error-state";
-import { getLineBookingGate, getLineBookingBootstrap, type GetLineBookingBootstrapResult } from "@/actions/lineBookingPage";
+import { getLineBookingBootstrap, type GetLineBookingBootstrapResult } from "@/actions/lineBookingPage";
 
 type ReadyData = Extract<GetLineBookingBootstrapResult, { ok: true }>;
 
@@ -27,8 +27,7 @@ interface PerfTimestamps {
   t2?: number;
   t3?: number;
   t4?: number;
-  /** TEMPORARY (cold-start investigation, see .claude/plans): only set when the corresponding Server Action returned one (RESERVATION_PERF_DEBUG=1). */
-  gateCorrelationId?: string;
+  /** TEMPORARY (cold-start investigation, see .claude/plans): only set when the Server Action returned one (RESERVATION_PERF_DEBUG=1). */
   bootstrapCorrelationId?: string;
 }
 
@@ -47,13 +46,18 @@ interface PerfTimestamps {
  * completes, including across the external-browser login redirect. Reading
  * location.search before that point is not reliable (see plan §11).
  *
- * Phase 1 staff scope (see lib/line/staffGate.ts): this page calls the
- * lightweight getLineBookingGate BEFORE ever touching liff.login()/
- * getIDToken(), and only proceeds with the LIFF login dance + the heavier
- * getLineBookingBootstrap call when the resolved staff is the one LINE is
- * enabled for. For every other staff it redirects straight to the plain
- * /reserve/[slug] page - LINE identity is never requested at all for an
- * ineligible staff, not even at the client.
+ * Phase 1 staff scope (see lib/line/staffGate.ts): this page compares `slug`
+ * against NEXT_PUBLIC_LINE_ENABLED_BOOKING_SLUG BEFORE ever touching
+ * liff.login()/getIDToken() - a public, non-secret routing hint (bookingSlug
+ * is already exposed in the plain booking URL) used ONLY to decide whether
+ * attempting LIFF login is worth it for this slug. It is NOT a security
+ * boundary: getLineBookingBootstrap always re-resolves the staff from the DB
+ * and re-checks isLineNotificationEnabledForStaff itself, so a
+ * missing/stale/tampered public value can at most send an ineligible staff's
+ * customer through an unnecessary (and safely rejected) login attempt - it
+ * can never grant access to another staff's data (see .claude/plans). For
+ * every slug that doesn't match the hint, this page redirects straight to
+ * the plain /reserve/[slug] page - LINE identity is never requested at all.
  */
 export default function LiffReservePage() {
   const router = useRouter();
@@ -91,27 +95,20 @@ export default function LiffReservePage() {
         return;
       }
 
-      // Lightweight gate: staff eligibility only, no availability/Calendar/
-      // Customer/LINE identity work - see actions/lineBookingPage.ts.
-      const gate = await getLineBookingGate(slug);
-      if (!gate.ok) {
-        if (!cancelled) setState({ phase: "error", reason: gate.reason });
-        return;
-      }
-      if (perfRef.current) {
-        perfRef.current.t2 = performance.now();
-        if (gate.perf) perfRef.current.gateCorrelationId = gate.perf.correlationId;
-      }
-
-      if (!gate.lineEnabled) {
-        // Ineligible staff: never call liff.isLoggedIn()/login()/getIDToken()
-        // for them - hand off to the ordinary, LINE-unaware booking page
-        // instead. router.replace (not push) so this LIFF URL doesn't linger
-        // in browser history underneath the plain booking page.
+      // Client routing hint ONLY - not a security boundary. See module doc
+      // above and .claude/plans: getLineBookingBootstrap independently
+      // re-verifies staff eligibility server-side regardless of this check.
+      if (slug !== process.env.NEXT_PUBLIC_LINE_ENABLED_BOOKING_SLUG) {
+        // Ineligible (or unconfigured) staff: never call liff.isLoggedIn()/
+        // login()/getIDToken() for them - hand off to the ordinary,
+        // LINE-unaware booking page instead. router.replace (not push) so
+        // this LIFF URL doesn't linger in browser history underneath the
+        // plain booking page.
         perfRef.current = null;
         router.replace(`/reserve/${slug}`);
         return;
       }
+      if (perfRef.current) perfRef.current.t2 = performance.now();
 
       if (!liff.isLoggedIn()) {
         // Navigates away (in an external browser) or resolves near-instantly
@@ -129,16 +126,22 @@ export default function LiffReservePage() {
       }
       if (perfRef.current) perfRef.current.t3 = performance.now();
 
-      // Single Server Action: fetches the booking page data (incl. Google
-      // FreeBusy) AND verifies the LINE identity + looks up a returning
-      // customer's prefill, running the two independent external waits
-      // concurrently server-side (see actions/lineBookingPage.ts). Unlike
-      // the old prefill-only call, this one genuinely can throw (it also
+      // Single Server Action: re-resolves the staff and re-verifies
+      // eligibility server-side (the client routing hint above is never
+      // trusted), fetches the booking page data (incl. Google FreeBusy) AND
+      // verifies the LINE identity + looks up a returning customer's
+      // prefill, running the two independent external waits concurrently
+      // (see actions/lineBookingPage.ts). Can genuinely throw (it also
       // supplies the availability grid, without which there's no meaningful
       // page) - run().catch() below handles that as an error screen.
       const data = await getLineBookingBootstrap(slug, idToken);
       if (!data.ok) {
-        if (!cancelled) setState({ phase: "error", reason: data.reason });
+        // Client hint said this slug was eligible, but the server-side
+        // re-check disagreed (stale/misconfigured NEXT_PUBLIC_LINE_ENABLED_
+        // BOOKING_SLUG, or a tampered client) - fall back to the plain
+        // booking page instead of a hard error, same as the ineligible-slug
+        // branch above (see .claude/plans).
+        router.replace(`/reserve/${slug}`);
         return;
       }
       if (perfRef.current) {
@@ -153,10 +156,9 @@ export default function LiffReservePage() {
       if (p && p.t1 !== undefined && p.t2 !== undefined && p.t3 !== undefined && p.t4 !== undefined) {
         const t5 = performance.now();
         const ms = (n: number) => n.toFixed(1);
-        const gateTag = p.gateCorrelationId ? `#${p.gateCorrelationId}` : "";
         const bootstrapTag = p.bootstrapCorrelationId ? `#${p.bootstrapCorrelationId}` : "";
         setPerfPanelText(
-          `init:${ms(p.t1 - p.t0)} gate:${ms(p.t2 - p.t1)}${gateTag} login:${ms(p.t3 - p.t2)} bootstrap:${ms(p.t4 - p.t3)}${bootstrapTag} dataReady:${ms(t5 - p.t0)}`,
+          `init:${ms(p.t1 - p.t0)} hint:${ms(p.t2 - p.t1)} login:${ms(p.t3 - p.t2)} bootstrap:${ms(p.t4 - p.t3)}${bootstrapTag} dataReady:${ms(t5 - p.t0)}`,
         );
       }
     }

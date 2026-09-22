@@ -17,57 +17,7 @@ import type { TwoWeekDayStatus } from "@/components/reserve/TwoWeekAvailabilityG
 // used for any behavior, never exposed outside RESERVATION_PERF_DEBUG-gated
 // logs. Not PII, not a secret.
 const PERF_INSTANCE_ID = randomUUID().slice(0, 8);
-let gateInvocationCount = 0;
 let bootstrapInvocationCount = 0;
-
-export type GetLineBookingGateResult =
-  | { ok: true; lineEnabled: boolean; perf?: { correlationId: string } }
-  | { ok: false; reason: "STAFF_NOT_FOUND" };
-
-/**
- * Lightweight first call from app/reserve/liff/page.tsx: resolves the staff
- * by bookingSlug and answers only "is LIFF login worth attempting for this
- * staff" (Phase 1 staff scope, see lib/line/staffGate.ts). Deliberately does
- * NOT touch availability/Calendar/Customer/LINE identity - those are all
- * deferred to getLineBookingBootstrap below, which only runs once this gate
- * has said lineEnabled:true and the client has a real ID token. Keeping this
- * call cheap means an ineligible staff's page load never pays for a heavy
- * availability computation before redirecting to the plain /reserve/[slug]
- * page.
- */
-export async function getLineBookingGate(bookingSlug: string): Promise<GetLineBookingGateResult> {
-  const perfDebug = process.env.RESERVATION_PERF_DEBUG === "1";
-  const correlationId = perfDebug ? randomUUID().slice(0, 8) : "";
-  const invocation = perfDebug ? (gateInvocationCount += 1) : 0;
-  const tStart = perfDebug ? performance.now() : 0;
-  let tBeforeDb = tStart;
-  let tAfterDb = tStart;
-
-  try {
-    tBeforeDb = perfDebug ? performance.now() : 0;
-    const staff = await resolveStaffByBookingSlug(bookingSlug);
-    tAfterDb = perfDebug ? performance.now() : 0;
-
-    if (!staff || !staff.active) return { ok: false, reason: "STAFF_NOT_FOUND" };
-    return {
-      ok: true,
-      lineEnabled: isLineNotificationEnabledForStaff(staff.id),
-      ...(perfDebug ? { perf: { correlationId } } : {}),
-    };
-  } finally {
-    // TEMPORARY (cold-start investigation, see .claude/plans): duration-only,
-    // no PII/bookingSlug/staffId. instance/invocation let us tell whether the
-    // same container handled a prior call in this session.
-    if (perfDebug) {
-      const tEnd = performance.now();
-      console.log(
-        `[perf:gate:${correlationId}] instance=${PERF_INSTANCE_ID} invocation=${invocation} ` +
-          `total=${(tEnd - tStart).toFixed(1)} beforeDb=${(tBeforeDb - tStart).toFixed(1)} ` +
-          `staffDb=${(tAfterDb - tBeforeDb).toFixed(1)} afterDb=${(tEnd - tAfterDb).toFixed(1)}`,
-      );
-    }
-  }
-}
 
 export type GetLineBookingBootstrapResult =
   | {
@@ -82,9 +32,9 @@ export type GetLineBookingBootstrapResult =
       customerPrefill: { name: string; email: string; phone: string } | null;
       /**
        * TEMPORARY (perf investigation, see .claude/plans): true only when
-       * RESERVATION_PERF_DEBUG=1 - this function only ever runs for the
-       * LINE-enabled staff to begin with (see the gate re-check below), so
-       * no separate staff condition is needed here.
+       * RESERVATION_PERF_DEBUG=1 - this function only ever returns ok:true
+       * for the LINE-enabled staff to begin with (see the staff-gate check
+       * below), so no separate staff condition is needed here.
        */
       perfDebug: boolean;
       /** TEMPORARY (cold-start investigation, see .claude/plans): only present when perfDebug is true. */
@@ -93,21 +43,24 @@ export type GetLineBookingBootstrapResult =
   | { ok: false; reason: "STAFF_NOT_FOUND" };
 
 /**
- * The second and only other call app/reserve/liff/page.tsx makes, once the
- * gate above said lineEnabled:true and a LIFF ID token is in hand. Combines
- * what used to be two sequential Server Actions (staff booking page data,
- * then LINE customer prefill) into one, and runs their two independent
- * external waits - the availability grid's Google Calendar FreeBusy call and
- * the LINE ID token verification - concurrently via Promise.all, since
- * neither depends on the other's result (see .claude/plans for the measured
- * rationale: these two were previously stuck in fully separate round trips).
+ * The single Server Action app/reserve/liff/page.tsx calls, once a
+ * client-side routing hint (NEXT_PUBLIC_LINE_ENABLED_BOOKING_SLUG - see
+ * .claude/plans) has decided LIFF login is worth attempting for this slug
+ * and a LIFF ID token is in hand. That client hint is a UI/routing
+ * convenience ONLY, never a security boundary - this function independently
+ * re-resolves staffId server-side from bookingSlug ONLY, from scratch, and
+ * re-checks staff.active + isLineNotificationEnabledForStaff itself. A
+ * tampered/stale client hint can at most cause an unnecessary LIFF login
+ * attempt that this function then rejects; it can never grant access to
+ * another staff's data.
  *
- * Deliberately re-resolves staffId server-side from bookingSlug ONLY, from
- * scratch - never trusts getLineBookingGate's earlier result or any
- * client-supplied identifier. This is the only function allowed to produce
- * a trusted lineUserId (via verifyLineIdToken) and the only place Customer
- * PII for this flow is read, so it re-derives staff eligibility
- * independently, exactly as the two functions it replaces did.
+ * Also runs its two independent external waits - the availability grid's
+ * Google Calendar FreeBusy call and the LINE ID token verification -
+ * concurrently via Promise.all, since neither depends on the other's result
+ * (see .claude/plans for the measured rationale).
+ *
+ * This is the only function allowed to produce a trusted lineUserId (via
+ * verifyLineIdToken) and the only place Customer PII for this flow is read.
  *
  * Returns null customerPrefill for every case that isn't "a verified,
  * returning LINE customer with a matching Customer row": first-time booker,
@@ -197,8 +150,8 @@ export async function getLineBookingBootstrap(
     };
   } finally {
     // TEMPORARY (cold-start investigation, see .claude/plans): duration-only,
-    // no PII/bookingSlug/staffId. instance/invocation let us tell whether the
-    // same container handled getLineBookingGate's call moments earlier.
+    // no PII/bookingSlug/staffId. instance/invocation let us tell whether
+    // this container had already served a prior request.
     if (perfDebug) {
       console.log(
         `[perf:bootstrap:${correlationId}] instance=${PERF_INSTANCE_ID} invocation=${invocation} total=${(performance.now() - tStart).toFixed(1)}`,

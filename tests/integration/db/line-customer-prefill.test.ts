@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db/prisma";
-import { getLineBookingGate, getLineBookingBootstrap } from "@/actions/lineBookingPage";
+import { getLineBookingBootstrap } from "@/actions/lineBookingPage";
 import { getFakeCalendarServiceForTests } from "@/lib/google/calendar/factory";
 import { resetDb, seedRoom, seedStaff, seedCustomer } from "../../helpers/db";
 
@@ -49,54 +49,6 @@ function createDeferred<T = void>() {
   });
   return { promise, resolve };
 }
-
-describe("getLineBookingGate (lightweight eligibility check - no availability/Calendar/Customer/LINE identity)", () => {
-  beforeEach(async () => {
-    await resetDb();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    if (ORIGINAL_ENABLED_STAFF_ID === undefined) delete process.env.LINE_ENABLED_STAFF_ID;
-    else process.env.LINE_ENABLED_STAFF_ID = ORIGINAL_ENABLED_STAFF_ID;
-  });
-
-  afterAll(async () => {
-    await resetDb();
-    await prisma.$disconnect();
-  });
-
-  it("returns lineEnabled:true for the LINE-enabled staff, never touching the network (no LINE API call possible from this function at all)", async () => {
-    const staff = await seedStaff();
-    enableLineFor(staff.id);
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await getLineBookingGate(staff.bookingSlug);
-    expect(result).toEqual({ ok: true, lineEnabled: true });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("returns lineEnabled:false for a non-enabled staff", async () => {
-    const staff = await seedStaff();
-    delete process.env.LINE_ENABLED_STAFF_ID;
-
-    const result = await getLineBookingGate(staff.bookingSlug);
-    expect(result).toEqual({ ok: true, lineEnabled: false });
-  });
-
-  it("unknown bookingSlug -> STAFF_NOT_FOUND", async () => {
-    const result = await getLineBookingGate("no-such-slug");
-    expect(result).toEqual({ ok: false, reason: "STAFF_NOT_FOUND" });
-  });
-
-  it("inactive staff -> STAFF_NOT_FOUND", async () => {
-    const staff = await seedStaff({ active: false });
-    enableLineFor(staff.id);
-    const result = await getLineBookingGate(staff.bookingSlug);
-    expect(result).toEqual({ ok: false, reason: "STAFF_NOT_FOUND" });
-  });
-});
 
 describe("getLineBookingBootstrap (booking data + LINE identity verify + customer prefill, in one call)", () => {
   beforeEach(async () => {
