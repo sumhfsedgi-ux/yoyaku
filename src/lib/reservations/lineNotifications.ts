@@ -1,10 +1,29 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db/prisma";
 import { getLineMessagingService } from "@/lib/line/messaging/factory";
 import { isLineNotificationEnabledForStaff } from "@/lib/line/staffGate";
+import { isLineRecipientAllowedInCurrentMode } from "@/lib/line/staffRecipients";
 import { isUniqueConstraintViolation } from "./errors";
 
-export type LineNotificationType = "LINE_CONFIRMATION" | "LINE_REMINDER";
+export type LineNotificationType = "LINE_CONFIRMATION" | "LINE_REMINDER" | "STAFF_NEW_RESERVATION";
+
+/**
+ * "" for LINE_CONFIRMATION/LINE_REMINDER - these have exactly one possible
+ * recipient (the reservation's own customer), so (reservationId, type) alone
+ * already identifies "who" and this preserves their dedupe behavior exactly
+ * as it was before recipientKey existed. STAFF_NEW_RESERVATION is the first
+ * type with more than one simultaneous recipient per reservation, so it
+ * needs a per-recipient key - a SHA-256 hash of the LINE userId rather than
+ * the raw id itself, so ReservationNotification (a table other staff-facing
+ * code already reads, see lib/reservations/queries.ts) never stores a staff
+ * member's actual LINE identity. The hash is deterministic (same userId ->
+ * same key every time), which is all the @@unique constraint needs to dedupe
+ * correctly.
+ */
+function recipientKeyFor(type: LineNotificationType, lineUserId: string): string {
+  if (type !== "STAFF_NEW_RESERVATION") return "";
+  return createHash("sha256").update(lineUserId).digest("hex");
+}
 
 export type ClaimAndSendLineNotificationResult =
   | { ok: true }
@@ -24,21 +43,29 @@ export type ClaimAndSendLineNotificationResult =
  *  1. Target selection guard (mode-based, BEFORE any ReservationNotification
  *     row is created - see plan §17 "dual guard", guard 1):
  *       - off: never claims, never sends. Returns immediately.
- *       - test: claims/sends ONLY when lineUserId === LINE_TEST_USER_ID.
- *         Every other recipient is skipped WITHOUT creating a row, so test
- *         runs never litter the table with FAILED rows for ordinary
- *         customers (plan §17/§5).
+ *       - test: claims/sends ONLY when lineUserId is allowed under the
+ *         current mode - see lib/line/staffRecipients.ts's
+ *         isLineRecipientAllowedInCurrentMode, the single shared policy this
+ *         guard and lib/line/messaging/real.ts's guard 2 both call (so
+ *         LINE_TEST_USER_ID for customer sends and
+ *         LINE_STAFF_NOTIFICATION_USER_IDS for STAFF_NEW_RESERVATION sends
+ *         stay usable in test mode without duplicating that allow-list logic
+ *         in two places). Every other recipient is skipped WITHOUT creating
+ *         a row, so test runs never litter the table with FAILED rows for
+ *         ordinary customers (plan §17/§5).
  *       - production: always proceeds to claim.
  *     LineMessagingService's real implementation independently re-checks the
  *     same mode as guard 2 (lib/line/messaging/real.ts) - this function does
  *     not rely on that alone.
  *
  *  2. DB-level dedupe/claim (plan §10/§14): a single atomic `create` against
- *     the @@unique([reservationId, type]) constraint on ReservationNotification.
- *     Exactly one concurrent caller's create succeeds (status: PENDING); every
- *     other caller (a Cron re-run, a race with a manual trigger, etc.) hits
- *     the unique-constraint violation and skips - never relies on an
- *     in-memory flag.
+ *     the @@unique([reservationId, type, recipientKey]) constraint on
+ *     ReservationNotification. Exactly one concurrent caller's create
+ *     succeeds (status: PENDING); every other caller (a Cron re-run, a race
+ *     with a manual trigger, a second staff recipient under the same type,
+ *     etc.) hits the unique-constraint violation and skips - never relies on
+ *     an in-memory flag. See recipientKeyFor() above for what recipientKey
+ *     actually is per type.
  *
  *  3. LINE Platform-level dedupe: a UUID `retryKey` is generated once at claim
  *     time and sent as X-Line-Retry-Key on every send attempt against this
@@ -75,21 +102,11 @@ export async function claimAndSendLineNotification(params: {
 
   const mode = process.env.LINE_NOTIFICATION_MODE ?? "off";
   if (mode === "off") return { ok: false, reason: "MODE_OFF" };
-  if (mode === "test" && params.lineUserId !== process.env.LINE_TEST_USER_ID) {
+  if (!isLineRecipientAllowedInCurrentMode(params.lineUserId)) {
     return { ok: false, reason: "MODE_TEST_NON_TEST_RECIPIENT" };
   }
 
-  // Always "" for now - both LineNotificationType values today
-  // (LINE_CONFIRMATION/LINE_REMINDER) have exactly one possible recipient
-  // (the reservation's own customer), so (reservationId, type) alone already
-  // identifies "who". Passed explicitly (rather than relying on the column's
-  // DB default) so this code already targets the new 3-column unique
-  // constraint below - see ReservationNotification's schema.prisma doc
-  // comment for why recipientKey exists and why the legacy 2-column unique
-  // constraint is kept in place alongside it for now. A later change
-  // introduces a non-"" recipientKey for a notification type with more than
-  // one simultaneous recipient.
-  const recipientKey = "";
+  const recipientKey = recipientKeyFor(params.type, params.lineUserId);
 
   const retryKey = randomUUID();
   try {

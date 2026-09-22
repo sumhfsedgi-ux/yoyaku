@@ -53,6 +53,11 @@ enum CalendarScope {
 enum ReservationNotificationType {
   LINE_CONFIRMATION
   LINE_REMINDER
+  /// Internal staff-facing push (not customer-facing) sent to every entry in
+  /// LINE_STAFF_NOTIFICATION_USER_IDS when a CUSTOMER_ONLINE reservation is
+  /// confirmed for LINE_ENABLED_STAFF_ID. The first type with more than one
+  /// simultaneous recipient per reservation - see recipientKey below.
+  STAFF_NEW_RESERVATION
 }
 
 enum ReservationNotificationStatus {
@@ -455,22 +460,22 @@ model LineTemplateSettings {
 /// itself also de-duplicates, independent of our own DB constraint (belt and
 /// suspenders - see src/lib/reservations/lineNotifications.ts).
 ///
-/// recipientKey (added in the "PR1" additive migration of the staff-LINE-
-/// notification plan): always "" for LINE_CONFIRMATION/LINE_REMINDER - these
-/// types have exactly one recipient (the reservation's own customer), so the
-/// (reservationId, type) pair alone already identifies "who" and this column
-/// changes nothing about their dedupe behavior. A future type with multiple
-/// simultaneous recipients per reservation (e.g. a staff-facing notification
-/// sent to more than one internal LINE account) sets recipientKey to a
-/// per-recipient value (never the raw recipient identifier - see
-/// lib/reservations/lineNotifications.ts for what's actually stored) so each
-/// recipient claims/dedupes independently under the same type. The legacy
-/// @@unique([reservationId, type]) is kept alongside the new 3-column unique
-/// during this transition PR specifically so this column's addition is pure
-/// migration-A-of-two, additive, zero-behavior-change; a later PR drops the
-/// legacy constraint (migration B) only once this PR has run safely in
-/// production, and only then can a second notification type actually use a
-/// non-"" recipientKey.
+/// recipientKey: always "" for LINE_CONFIRMATION/LINE_REMINDER - these types
+/// have exactly one recipient (the reservation's own customer), so
+/// (reservationId, type) alone already identified "who" and this column
+/// changes nothing about their dedupe behavior. STAFF_NEW_RESERVATION is the
+/// first type with more than one simultaneous recipient per reservation (one
+/// row per LINE_STAFF_NOTIFICATION_USER_IDS entry) - its recipientKey is a
+/// SHA-256 hash of the recipient's LINE userId (see
+/// lib/reservations/lineNotifications.ts's recipientKeyFor), never the raw
+/// userId, so this table never stores a staff member's actual LINE identity,
+/// only a stable-but-opaque per-recipient dedupe key.
+///
+/// The legacy @@unique([reservationId, type]) that predated recipientKey was
+/// removed in this migration (see migration "drop_legacy_reservation_type_
+/// unique") - it was kept for one prior PR/deploy specifically so adding
+/// this column was pure additive/zero-behavior-change before any code
+/// depended on the new 3-column unique below being the only one.
 ///
 /// Deliberately minimal for Phase 1: no retry-count/channel/payload-snapshot
 /// columns. Future notification types (LINE_RESCHEDULE, LINE_CANCELLATION,
@@ -489,7 +494,6 @@ model ReservationNotification {
   createdAt     DateTime                       @default(now()) @db.Timestamptz
   updatedAt     DateTime                       @updatedAt @db.Timestamptz
 
-  @@unique([reservationId, type], map: "ReservationNotification_reservationId_type_key")
   @@unique([reservationId, type, recipientKey])
 }
 

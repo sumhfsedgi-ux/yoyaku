@@ -1,3 +1,4 @@
+import { isLineRecipientAllowedInCurrentMode } from "@/lib/line/staffRecipients";
 import type { LineMessagingService, PushLineMessageInput } from "./port";
 
 const LINE_PUSH_ENDPOINT = "https://api.line.me/v2/bot/message/push";
@@ -25,13 +26,17 @@ function maskRecipient(to: string): string {
  * "dual guard") even though callers are also expected to filter their target
  * list by mode before ever constructing a claim - this is the last line of
  * defense against ever pushing to a real customer while not in production
- * mode, or at all while disabled.
+ * mode, or at all while disabled. The actual allow/deny policy for "which
+ * recipient is reachable in test mode" is NOT duplicated here - it lives in
+ * lib/line/staffRecipients.ts's isLineRecipientAllowedInCurrentMode, the
+ * same function lib/reservations/lineNotifications.ts's guard 1 calls, so
+ * the two guards can never drift out of sync on who they allow.
  */
 export class RealLineMessagingService implements LineMessagingService {
   async pushMessage(input: PushLineMessageInput): Promise<{ ok: true } | { ok: false; error: string }> {
     const mode = process.env.LINE_NOTIFICATION_MODE ?? "off";
     if (mode === "off") return { ok: false, error: "LINE_DISABLED" };
-    if (mode === "test" && input.to !== process.env.LINE_TEST_USER_ID) {
+    if (!isLineRecipientAllowedInCurrentMode(input.to)) {
       return { ok: false, error: "TEST_MODE_BLOCKED_NON_TEST_RECIPIENT" };
     }
 

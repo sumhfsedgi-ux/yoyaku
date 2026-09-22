@@ -104,7 +104,12 @@ export async function getReservationDetail(reservationId: string, viewerStaffId:
       customerPhoneSnapshot: true,
       staff: { select: { displayName: true } },
       customer: { select: { name: true, email: true, phone: true, firstVisitDate: true } },
-      notifications: { select: { type: true, status: true } },
+      // STAFF_NEW_RESERVATION rows are deliberately excluded here - this
+      // detail is customer-notification status only (LINE_CONFIRMATION/
+      // LINE_REMINDER), and staff push delivery status is never surfaced to
+      // this UI (see plan §10 - no need to show it, and ReservationDetail's
+      // lineNotifications type below is still exactly 2 values wide).
+      notifications: { where: { type: { in: ["LINE_CONFIRMATION", "LINE_REMINDER"] } }, select: { type: true, status: true } },
     },
   });
 
@@ -127,8 +132,20 @@ export async function getReservationDetail(reservationId: string, viewerStaffId:
       phone: reservation.customerPhoneSnapshot ?? reservation.customer.phone,
       firstVisitDate: reservation.customer.firstVisitDate,
     },
-    lineNotifications: reservation.notifications,
+    // The `where` above already excludes STAFF_NEW_RESERVATION rows at the DB
+    // level; this filter narrows the static type to match (and stays
+    // correct as a runtime no-op even if that `where` were ever removed by
+    // accident - belt and suspenders, same reasoning as elsewhere in the
+    // LINE code).
+    lineNotifications: reservation.notifications.filter(isCustomerFacingNotification),
   };
+}
+
+function isCustomerFacingNotification(n: {
+  type: string;
+  status: "PENDING" | "SENT" | "FAILED";
+}): n is { type: "LINE_CONFIRMATION" | "LINE_REMINDER"; status: "PENDING" | "SENT" | "FAILED" } {
+  return n.type === "LINE_CONFIRMATION" || n.type === "LINE_REMINDER";
 }
 
 /** Reservation counts per day for a month view, keyed by "YYYY-MM-DD". Deliberately just a count, no PII, no staff detail. */

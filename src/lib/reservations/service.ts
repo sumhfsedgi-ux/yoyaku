@@ -12,6 +12,8 @@ import { getReservationConfirmationBodyForSending } from "@/lib/email/emailTempl
 import { buildReservationEmailVariables, renderReservationEmailTemplate } from "@/lib/email/reservationEmailTemplate";
 import { verifyLineIdToken } from "@/lib/line/identity";
 import { isLineNotificationEnabledForStaff } from "@/lib/line/staffGate";
+import { getStaffNotificationRecipientIds } from "@/lib/line/staffRecipients";
+import { DEFAULT_STAFF_NEW_RESERVATION_MESSAGE } from "@/lib/line/lineTemplate";
 import { createReservationInputSchema, rescheduleReservationInputSchema } from "@/lib/validation/schemas";
 import { normalizePhoneDigits } from "@/lib/customers/normalize";
 import { isExclusionConstraintViolation, isUniqueConstraintViolation } from "./errors";
@@ -218,6 +220,46 @@ async function sendBookingNotificationsBestEffort(reservationId: string): Promis
       lineUserId: reservation.customer.lineUserId,
       text: renderReservationEmailTemplate(bodyTemplate, confirmationVariables),
     }).catch((err) => console.error(`booking notification: line confirmation failed for reservation ${reservationId}`, err));
+  }
+
+  // Staff push notifications - entirely independent of the customer LINE
+  // confirmation above (sent even when this customer has no linked LINE
+  // account at all - plan §6). Outer gate, checked BEFORE doing any work:
+  // only a CUSTOMER_ONLINE reservation (never a STAFF_MANUAL one a staff
+  // member entered themselves from the admin screen - plan §3) for
+  // LINE_ENABLED_STAFF_ID even enters this block at all. This is in ADDITION
+  // to (not instead of) claimAndSendLineNotification's own internal
+  // isLineNotificationEnabledForStaff check below (guard 0 there) - that
+  // inner check stays as defense in depth against a future direct call to
+  // claimAndSendLineNotification that skips this outer gate; this outer gate
+  // exists so a non-enabled staff's booking never even attempts the
+  // per-recipient claim/send loop in the first place.
+  if (reservation.source === "CUSTOMER_ONLINE" && isLineNotificationEnabledForStaff(reservation.staffId)) {
+    const staffRecipientIds = getStaffNotificationRecipientIds();
+    if (staffRecipientIds.length > 0) {
+      const staffNotificationText = renderReservationEmailTemplate(DEFAULT_STAFF_NEW_RESERVATION_MESSAGE, confirmationVariables);
+      const results = await Promise.allSettled(
+        staffRecipientIds.map((lineUserId) =>
+          claimAndSendLineNotification({ reservationId, type: "STAFF_NEW_RESERVATION", lineUserId, text: staffNotificationText }),
+        ),
+      );
+      // Each recipient is independent (plan §12/§23): one succeeding never
+      // undoes another's success, and a failure here never touches the
+      // booking result. Only a genuine send failure (SEND_FAILED) or an
+      // unexpected rejection (claimAndSendLineNotification is documented to
+      // never throw, so this would itself be a bug) counts as a "problem" to
+      // log - STAFF_NOT_ENABLED/MODE_OFF/MODE_TEST_NON_TEST_RECIPIENT/
+      // ALREADY_CLAIMED are all expected, silent no-ops (plan §5), not
+      // errors. Never logs userId/customerName/message text (plan §24).
+      const problems = results.filter(
+        (r) => r.status === "rejected" || (r.status === "fulfilled" && !r.value.ok && r.value.reason === "SEND_FAILED"),
+      );
+      if (problems.length > 0) {
+        console.error(
+          `booking notification: staff push failed for ${problems.length}/${staffRecipientIds.length} recipient(s), reservation ${reservationId}`,
+        );
+      }
+    }
   }
 }
 
