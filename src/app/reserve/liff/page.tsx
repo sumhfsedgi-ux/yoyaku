@@ -27,6 +27,9 @@ interface PerfTimestamps {
   t2?: number;
   t3?: number;
   t4?: number;
+  /** TEMPORARY (cold-start investigation, see .claude/plans): only set when the corresponding Server Action returned one (RESERVATION_PERF_DEBUG=1). */
+  gateCorrelationId?: string;
+  bootstrapCorrelationId?: string;
 }
 
 /**
@@ -95,7 +98,10 @@ export default function LiffReservePage() {
         if (!cancelled) setState({ phase: "error", reason: gate.reason });
         return;
       }
-      if (perfRef.current) perfRef.current.t2 = performance.now();
+      if (perfRef.current) {
+        perfRef.current.t2 = performance.now();
+        if (gate.perf) perfRef.current.gateCorrelationId = gate.perf.correlationId;
+      }
 
       if (!gate.lineEnabled) {
         // Ineligible staff: never call liff.isLoggedIn()/login()/getIDToken()
@@ -135,7 +141,10 @@ export default function LiffReservePage() {
         if (!cancelled) setState({ phase: "error", reason: data.reason });
         return;
       }
-      if (perfRef.current) perfRef.current.t4 = performance.now();
+      if (perfRef.current) {
+        perfRef.current.t4 = performance.now();
+        if (data.perf) perfRef.current.bootstrapCorrelationId = data.perf.correlationId;
+      }
       if (!data.perfDebug) perfRef.current = null; // not the debug-eligible staff, or the flag is off - stop tracking
 
       if (!cancelled) setState({ phase: "ready", data, idToken });
@@ -144,8 +153,10 @@ export default function LiffReservePage() {
       if (p && p.t1 !== undefined && p.t2 !== undefined && p.t3 !== undefined && p.t4 !== undefined) {
         const t5 = performance.now();
         const ms = (n: number) => n.toFixed(1);
+        const gateTag = p.gateCorrelationId ? `#${p.gateCorrelationId}` : "";
+        const bootstrapTag = p.bootstrapCorrelationId ? `#${p.bootstrapCorrelationId}` : "";
         setPerfPanelText(
-          `init:${ms(p.t1 - p.t0)} gate:${ms(p.t2 - p.t1)} login:${ms(p.t3 - p.t2)} bootstrap:${ms(p.t4 - p.t3)} dataReady:${ms(t5 - p.t0)}`,
+          `init:${ms(p.t1 - p.t0)} gate:${ms(p.t2 - p.t1)}${gateTag} login:${ms(p.t3 - p.t2)} bootstrap:${ms(p.t4 - p.t3)}${bootstrapTag} dataReady:${ms(t5 - p.t0)}`,
         );
       }
     }
