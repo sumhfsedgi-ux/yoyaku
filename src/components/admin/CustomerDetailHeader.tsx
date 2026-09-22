@@ -1,4 +1,5 @@
 import { dateToJst } from "@/lib/time/tz";
+import { Badge } from "@/components/ui/badge";
 import type { CustomerDetail } from "@/lib/customers/queries";
 
 function formatYen(amount: number): string {
@@ -8,7 +9,11 @@ function formatYen(amount: number): string {
 export function CustomerDetailHeader({ customer }: { customer: CustomerDetail }) {
   return (
     <div className="rounded-xl border border-border bg-card p-4">
-      <h1 className="mb-1 text-xl font-semibold tracking-tight text-foreground">{customer.name}</h1>
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">{customer.name}</h1>
+        {/* Status badge only - the LINE userId itself is never shown here (plan §24/§25). */}
+        {customer.lineLinked && <Badge variant="secondary">LINE連携済み</Badge>}
+      </div>
       <p className="mb-4 text-sm text-muted-foreground">
         {customer.email} ・ {customer.phone}
       </p>

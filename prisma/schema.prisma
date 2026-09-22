@@ -50,6 +50,17 @@ enum CalendarScope {
   ROOM
 }
 
+enum ReservationNotificationType {
+  LINE_CONFIRMATION
+  LINE_REMINDER
+}
+
+enum ReservationNotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
 model Room {
   id           String        @id @default(cuid())
   name         String
@@ -168,6 +179,18 @@ model Customer {
   /// normalizePhoneDigits) so search/dedupe can match regardless of hyphen
   /// formatting without per-query normalization of the stored value.
   phoneDigits  String
+  /// LINE Login/LIFF-verified LINE userId ("sub" claim from LINE's ID token
+  /// verify endpoint - see src/lib/line/identity.ts). NEVER set from a raw
+  /// client-supplied string. Null for the vast majority of existing/未連携
+  /// customers. Scoped uniqueness is per-staff (see @@unique below), same
+  /// isolation model as email - the same real LINE user booking under two
+  /// different staff members produces two independent Customer rows, never
+  /// merged across ownerStaffId. On a rare same-staff conflict (this LINE
+  /// user already linked to a DIFFERENT Customer row under this staff, e.g.
+  /// via a different email), the booking path never overwrites - it skips
+  /// attaching lineUserId and lets the reservation succeed anyway (see
+  /// resolveLineUserIdForCustomerUpsert in lib/reservations/service.ts).
+  lineUserId   String?
   createdAt    DateTime      @default(now()) @db.Timestamptz
   updatedAt    DateTime      @updatedAt @db.Timestamptz
   reservations Reservation[]
@@ -182,6 +205,11 @@ model Customer {
   retailSales                   RetailSale[]
 
   @@unique([ownerStaffId, email])
+  /// Postgres treats multiple NULLs as non-conflicting, so the many customers
+  /// with no LINE link (lineUserId = null) are unaffected. Scoped by
+  /// ownerStaffId so the same LINE user can independently link to a Customer
+  /// row under each staff member - never a cross-staff merge.
+  @@unique([ownerStaffId, lineUserId])
   @@index([ownerStaffId, firstVisitDate])
   @@index([ownerStaffId, phoneDigits])
 }
@@ -233,6 +261,7 @@ model Reservation {
   updatedAt DateTime @updatedAt @db.Timestamptz
 
   visitRecord VisitRecord?
+  notifications ReservationNotification[]
 
   @@index([roomId, startAt, endAt])
   @@index([staffId, startAt])
@@ -389,6 +418,60 @@ model EmailTemplateSettings {
   reservationConfirmationBody String
   createdAt                   DateTime @default(now()) @db.Timestamptz
   updatedAt                   DateTime @updatedAt @db.Timestamptz
+}
+
+/// Body of the day-before LINE reminder only. The booking-confirmation
+/// message is deliberately NOT duplicated here - by product decision, the
+/// customer-facing confirmation text is a single shared body (see
+/// EmailTemplateSettings.reservationConfirmationBody /
+/// getReservationConfirmationBodyForSending), sent as the Gmail body AND, for
+/// LINE-linked customers, as the LINE push text as-is - one text for staff to
+/// maintain, not two copies that can drift apart. All staff share one
+/// reminder body, same singleton convention as EmailTemplateSettings (fixed
+/// id "main"). Plain text with the same {{tag}} placeholders as the email
+/// template (see src/lib/email/reservationEmailTemplate.ts, reused as-is - no
+/// LINE-specific tag set). A missing row, or a row that fails validation,
+/// falls back to DEFAULT_LINE_REMINDER_BODY at send time - see
+/// src/lib/line/lineTemplate.ts - so the reminder send never breaks because
+/// of a bad template.
+model LineTemplateSettings {
+  id           String   @id
+  reminderBody String
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+}
+
+/// One row per (reservation, notification type) attempt - the DB-level
+/// dedupe/claim mechanism for LINE sends (see plan: two-phase
+/// claim-then-update, using @@unique below as the sole source of truth for
+/// "has this been claimed" rather than any in-memory flag). A cron re-run or
+/// concurrent request racing to send the same notification will have exactly
+/// one winner: whichever caller's `create` (status PENDING) succeeds; the
+/// loser hits this unique constraint and skips.
+///
+/// retryKey is generated once at claim time and reused for every send
+/// attempt against this same row (including a future manual resend) - it is
+/// sent as LINE Messaging API's X-Line-Retry-Key header so the LINE Platform
+/// itself also de-duplicates, independent of our own DB constraint (belt and
+/// suspenders - see src/lib/reservations/lineNotifications.ts).
+///
+/// Deliberately minimal for Phase 1: no retry-count/channel/payload-snapshot
+/// columns. Future notification types (LINE_RESCHEDULE, LINE_CANCELLATION,
+/// etc.) are added as new enum values only - this table never needs new
+/// columns for that.
+model ReservationNotification {
+  id            String                         @id @default(cuid())
+  reservationId String
+  reservation   Reservation                    @relation(fields: [reservationId], references: [id])
+  type          ReservationNotificationType
+  status        ReservationNotificationStatus
+  retryKey      String                         @unique
+  sentAt        DateTime?                      @db.Timestamptz
+  errorMessage  String?
+  createdAt     DateTime                       @default(now()) @db.Timestamptz
+  updatedAt     DateTime                       @updatedAt @db.Timestamptz
+
+  @@unique([reservationId, type])
 }
 
 /// DB-backed fixed-window rate limiting for public endpoints. Required because

@@ -1,3 +1,4 @@
+import type { Prisma } from "@/generated/prisma";
 import { prisma } from "@/lib/db/prisma";
 import { validateSlotBookable } from "@/lib/availability/engine";
 import { prismaAvailabilityDeps } from "@/lib/availability/data";
@@ -8,12 +9,51 @@ import { getGmailService } from "@/lib/google/gmail/factory";
 import { resolveRoomCalendarId } from "@/lib/google/roomCalendar";
 import { buildCustomerConfirmationEmail, buildStaffNotificationEmail } from "@/lib/google/gmail/templates";
 import { getReservationConfirmationBodyForSending } from "@/lib/email/emailTemplateSettings";
-import { buildReservationEmailVariables } from "@/lib/email/reservationEmailTemplate";
+import { buildReservationEmailVariables, renderReservationEmailTemplate } from "@/lib/email/reservationEmailTemplate";
+import { verifyLineIdToken } from "@/lib/line/identity";
+import { isLineNotificationEnabledForStaff } from "@/lib/line/staffGate";
 import { createReservationInputSchema, rescheduleReservationInputSchema } from "@/lib/validation/schemas";
 import { normalizePhoneDigits } from "@/lib/customers/normalize";
-import { isExclusionConstraintViolation } from "./errors";
+import { isExclusionConstraintViolation, isUniqueConstraintViolation } from "./errors";
+import { claimAndSendLineNotification, resetLineReminderClaim } from "./lineNotifications";
 
 const SERVICE_DURATION_MS = SERVICE_DURATION_MINUTES * 60 * 1000;
+
+/**
+ * Decides the lineUserId value (if any) to write on the Customer row matched
+ * by (ownerStaffId, email) during the booking upsert - see createReservation.
+ * Returns undefined when the field should be left untouched (no verified
+ * LINE identity, or a conflict that must not overwrite an existing link).
+ *
+ * Conflict rules (plan §12, never overwrite, never fail the booking):
+ *  - This customer (by email) has no lineUserId yet -> set it.
+ *  - This customer already has exactly this lineUserId -> no-op (harmless to re-set).
+ *  - This customer already has a DIFFERENT lineUserId -> leave it, skip.
+ *  - A DIFFERENT customer row under this same staff already owns this
+ *    lineUserId (e.g. the same LINE user previously booked under another
+ *    email) -> skip, never merge two Customer rows.
+ *
+ * This is a best-effort pre-check only - it cannot fully close a race
+ * between two concurrent requests. The caller must additionally catch a
+ * unique-constraint violation on the actual write and retry without
+ * lineUserId (see isUniqueConstraintViolation) so the reservation itself
+ * never fails because of this.
+ */
+async function resolveLineUserIdForCustomerUpsert(
+  tx: Prisma.TransactionClient,
+  ownerStaffId: string,
+  email: string,
+  verifiedLineUserId: string,
+): Promise<string | undefined> {
+  const [existingByEmail, existingByLineUserId] = await Promise.all([
+    tx.customer.findUnique({ where: { ownerStaffId_email: { ownerStaffId, email } }, select: { lineUserId: true } }),
+    tx.customer.findFirst({ where: { ownerStaffId, lineUserId: verifiedLineUserId }, select: { email: true } }),
+  ]);
+
+  if (existingByLineUserId && existingByLineUserId.email !== email) return undefined;
+  if (existingByEmail?.lineUserId && existingByEmail.lineUserId !== verifiedLineUserId) return undefined;
+  return verifiedLineUserId;
+}
 
 export interface CreateReservationInput {
   staffId: string;
@@ -28,6 +68,15 @@ export interface CreateReservationInput {
   contactOverride?: { name: string; email: string; phone: string };
   /** Honeypot - must be empty. A non-empty value silently no-ops the booking. */
   website?: string;
+  /**
+   * Raw LIFF/LINE Login ID Token from the /reserve/liff entry point - NEVER a
+   * lineUserId string itself (see lib/line/identity.ts's verifyLineIdToken,
+   * the only place a trusted userId is derived from this). Only meaningful
+   * alongside `customer` (the plain `/reserve/[slug]` link never carries
+   * one). A missing/invalid token silently proceeds with no LINE identity -
+   * it never fails the booking.
+   */
+  lineIdToken?: string;
 }
 
 export type CreateReservationResult =
@@ -117,6 +166,18 @@ async function sendBookingNotificationsBestEffort(reservationId: string): Promis
     phone: reservation.customerPhoneSnapshot ?? reservation.customer.phone,
   };
 
+  // Single shared confirmation body/variables: the same {{tag}} template is
+  // sent as-is to Gmail (customer email) below AND, for LINE-linked
+  // customers, rendered again as the LINE push text further down - one text
+  // for staff to maintain in Settings, not two copies that can drift apart
+  // (see LineTemplateSettings's schema doc comment).
+  const confirmationVariables = buildReservationEmailVariables({
+    customerName: contact.name,
+    startAt: reservation.startAt,
+    endAt: reservation.endAt,
+    salonName: reservation.staff.salonName,
+  });
+
   const gmail = getGmailService();
 
   // Each send is independent: a failure sending the customer's confirmation
@@ -124,18 +185,7 @@ async function sendBookingNotificationsBestEffort(reservationId: string): Promis
   // Calendar sync, there is no persisted status for these, so a failure here
   // is only ever visible in server logs.
   await gmail
-    .sendEmail(
-      buildCustomerConfirmationEmail({
-        to: contact.email,
-        bodyTemplate,
-        variables: buildReservationEmailVariables({
-          customerName: contact.name,
-          startAt: reservation.startAt,
-          endAt: reservation.endAt,
-          salonName: reservation.staff.salonName,
-        }),
-      }),
-    )
+    .sendEmail(buildCustomerConfirmationEmail({ to: contact.email, bodyTemplate, variables: confirmationVariables }))
     .catch((err) => console.error(`booking notification: customer confirmation email failed for reservation ${reservationId}`, err));
 
   await gmail
@@ -151,6 +201,24 @@ async function sendBookingNotificationsBestEffort(reservationId: string): Promis
       }),
     )
     .catch((err) => console.error(`booking notification: staff notification email failed for reservation ${reservationId}`, err));
+
+  // LINE confirmation - purely additive alongside Gmail above, never in place
+  // of it (see plan §2/§28): a customer with no linked LINE account is simply
+  // skipped here and only ever receives the Gmail confirmation. Uses the
+  // SAME bodyTemplate/confirmationVariables as the Gmail send above (see
+  // comment further up) - not a separately-edited LINE-only body. Awaited
+  // (not fire-and-forget) for the same reason Gmail is awaited - a Vercel
+  // function can be frozen once the response is sent (plan §23/§29). Never
+  // throws - claimAndSendLineNotification's own off/test-mode gating and DB
+  // claim guarantee this can never double-send or affect the booking result.
+  if (reservation.customer.lineUserId) {
+    await claimAndSendLineNotification({
+      reservationId,
+      type: "LINE_CONFIRMATION",
+      lineUserId: reservation.customer.lineUserId,
+      text: renderReservationEmailTemplate(bodyTemplate, confirmationVariables),
+    }).catch((err) => console.error(`booking notification: line confirmation failed for reservation ${reservationId}`, err));
+  }
 }
 
 export async function createReservation(rawInput: CreateReservationInput): Promise<CreateReservationResult> {
@@ -199,29 +267,83 @@ export async function createReservation(rawInput: CreateReservationInput): Promi
   // customer record is actually being used (existing or freshly upserted).
   const snapshot = input.customerId ? (input.contactOverride ?? existingCustomer!) : input.customer!;
 
+  // LINE identity verification happens here, BEFORE the DB transaction (it is
+  // a network call to LINE's own verify endpoint - see lib/line/identity.ts -
+  // and must never hold a transaction open while waiting on it). A missing or
+  // failed verification silently proceeds with no LINE identity - it must
+  // never fail the reservation itself (plan §6/§10). Only meaningful on the
+  // new/returning-customer upsert path (input.customer) - the staff-picked
+  // existing-customer path (customerId) never accepts a lineIdToken at all.
+  //
+  // Phase 1 staff scope: LINE is restricted to exactly one staff member (see
+  // lib/line/staffGate.ts). `input.staffId` is never trusted directly for
+  // this decision - by this point it has already been re-confirmed to name a
+  // real, active Staff row via validateSlotBookable above, but the gate below
+  // re-derives it from an explicit DB read rather than reusing the raw input
+  // value, so the LINE-enabled decision is always made from a value the
+  // server just confirmed exists, not from whatever the caller passed in.
+  // For every other staff, verifyLineIdToken is never even called - no
+  // Customer.lineUserId can be newly acquired for them.
+  let verifiedLineUserId: string | undefined;
+  if (!input.customerId && input.lineIdToken) {
+    const confirmedStaff = await prisma.staff.findUnique({ where: { id: input.staffId }, select: { id: true } });
+    if (confirmedStaff && isLineNotificationEnabledForStaff(confirmedStaff.id)) {
+      const verified = await verifyLineIdToken(input.lineIdToken);
+      if (verified.ok) verifiedLineUserId = verified.lineUserId;
+    }
+  }
+
   let reservationId: string;
   try {
     reservationId = await prisma.$transaction(async (tx) => {
-      const customer = input.customerId
-        ? existingCustomer!
-        : // IMPORTANT: `update` here must never include firstVisitDate/
-          // firstVisitAcquisitionSourceId. This upsert runs on EVERY booking by
-          // a returning customer (online and manual), so touching those fields
-          // here would silently overwrite/erase the customer chart's
-          // first-visit data on the customer's 2nd+ booking. Chart-side
-          // first-visit recording lives entirely in actions/visitRecords.ts's
-          // createMyVisitRecord.
-          await tx.customer.upsert({
+      let customer: { id: string; name: string; email: string; phone: string };
+      if (input.customerId) {
+        customer = existingCustomer!;
+      } else {
+        // IMPORTANT: `update` here must never include firstVisitDate/
+        // firstVisitAcquisitionSourceId. This upsert runs on EVERY booking by
+        // a returning customer (online and manual), so touching those fields
+        // here would silently overwrite/erase the customer chart's
+        // first-visit data on the customer's 2nd+ booking. Chart-side
+        // first-visit recording lives entirely in actions/visitRecords.ts's
+        // createMyVisitRecord.
+        const baseUpdateData = { name: input.customer!.name, phone: input.customer!.phone, phoneDigits: normalizePhoneDigits(input.customer!.phone) };
+        const baseCreateData = {
+          ownerStaffId: input.staffId,
+          name: input.customer!.name,
+          email: input.customer!.email,
+          phone: input.customer!.phone,
+          phoneDigits: normalizePhoneDigits(input.customer!.phone),
+        };
+
+        const resolvedLineUserId = verifiedLineUserId
+          ? await resolveLineUserIdForCustomerUpsert(tx, input.staffId, input.customer!.email, verifiedLineUserId)
+          : undefined;
+
+        const upsertCustomer = (lineUserIdToSet: string | undefined) =>
+          tx.customer.upsert({
             where: { ownerStaffId_email: { ownerStaffId: input.staffId, email: input.customer!.email } },
-            update: { name: input.customer!.name, phone: input.customer!.phone, phoneDigits: normalizePhoneDigits(input.customer!.phone) },
-            create: {
-              ownerStaffId: input.staffId,
-              name: input.customer!.name,
-              email: input.customer!.email,
-              phone: input.customer!.phone,
-              phoneDigits: normalizePhoneDigits(input.customer!.phone),
-            },
+            update: lineUserIdToSet !== undefined ? { ...baseUpdateData, lineUserId: lineUserIdToSet } : baseUpdateData,
+            create: lineUserIdToSet !== undefined ? { ...baseCreateData, lineUserId: lineUserIdToSet } : baseCreateData,
           });
+
+        try {
+          customer = await upsertCustomer(resolvedLineUserId);
+        } catch (err) {
+          // A race with another concurrent request slipped past
+          // resolveLineUserIdForCustomerUpsert's pre-check (e.g. two bookings
+          // by the same LINE user under different emails, at the same
+          // instant) and hit the @@unique([ownerStaffId, lineUserId])
+          // constraint. Retry without lineUserId so the reservation itself
+          // always succeeds - a LINE-linking conflict must never fail a
+          // booking (plan §12).
+          if (resolvedLineUserId !== undefined && isUniqueConstraintViolation(err)) {
+            customer = await upsertCustomer(undefined);
+          } else {
+            throw err;
+          }
+        }
+      }
 
       const reservation = await tx.reservation.create({
         data: {
@@ -316,6 +438,15 @@ export async function rescheduleReservation(rawInput: RescheduleReservationInput
   }
 
   await syncReservationToCalendarBestEffort(existing.id).catch((err) => console.error(`calendar sync failed for reservation ${existing.id}`, err));
+
+  // Reset LINE_REMINDER eligibility to the new date (plan §12/§16): reminder
+  // eligibility is always computed from the reservation's CURRENT startAt, so
+  // deleting any prior claim/send row is enough for it to become eligible
+  // again at the new day-before-19:00 window - no date-comparison logic
+  // needed. LINE_CONFIRMATION is deliberately never reset here - Phase 1 does
+  // not resend a confirmation on reschedule. Best-effort, same as the
+  // Calendar resync above - never affects the reschedule result.
+  await resetLineReminderClaim(existing.id).catch((err) => console.error(`line reminder reset failed for reservation ${existing.id}`, err));
 
   return { ok: true };
 }

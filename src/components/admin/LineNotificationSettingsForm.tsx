@@ -6,10 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ResponsiveDialogOrSheet } from "@/components/ui/responsive-dialog-or-sheet";
-import { updateReservationEmailTemplate } from "@/actions/emailTemplateSettings";
-import { sendLineConfirmationTestMessage } from "@/actions/lineTemplateSettings";
+import { updateLineReminderTemplate, sendLineReminderTestMessage } from "@/actions/lineTemplateSettings";
+import { DEFAULT_LINE_REMINDER_BODY } from "@/lib/line/lineTemplate";
 import {
-  DEFAULT_RESERVATION_CONFIRMATION_BODY,
   RESERVATION_EMAIL_TAGS,
   SAMPLE_RESERVATION_EMAIL_VARIABLES,
   renderReservationEmailTemplate,
@@ -23,28 +22,31 @@ const MESSAGES: Record<string, string> = {
   MISSING_DATETIME: "本文に予約日と開始時刻が分かる差し込み項目（【予約日時】など）を含めてください。",
 };
 
-const DEFAULT_EDITOR_TEXT = templateToEditorText(DEFAULT_RESERVATION_CONFIRMATION_BODY);
+const DEFAULT_EDITOR_TEXT = templateToEditorText(DEFAULT_LINE_REMINDER_BODY);
 
 /**
- * `initialBody` comes from the server as the raw DB {{tag}} string (see
- * app/(admin)/settings/page.tsx) - converted to Japanese-label display text
- * once here via templateToEditorText() so a staff member never sees an
- * internal key name. The Textarea itself is a plain, native, uncontrolled-
- * feeling input (same convention as ReservationSettingsForm's fields) -
- * deliberately NOT a rich/contentEditable editor, so IME/undo/copy-paste all
- * just work as normal browser behavior.
+ * "前日リマインドLINE" - the day-before reminder body only. The
+ * booking-confirmation message has its own section removed from here: it is
+ * now a single shared body edited via ReservationEmailTemplateForm.tsx
+ * (メール), sent as-is to Gmail and, for LINE-linked customers, as the LINE
+ * push text too - see lib/reservations/service.ts. Keeping this card to a
+ * single section avoids duplicate editable copies of near-identical text.
+ * Mirrors ReservationEmailTemplateForm.tsx's editing UX (【label】 display,
+ * tag-insert buttons, reset, preview) but sends plain text (no HTML) and adds
+ * a test-send button, visible/usable only when the server says test mode is
+ * available (see actions/lineTemplateSettings.ts, re-checked server-side on
+ * every test-send call).
  */
-export function ReservationEmailTemplateForm({
-  initialBody,
-  staffSalonName,
+export function LineNotificationSettingsForm({
+  initialReminderBody,
   testSendAvailable,
+  staffSalonName,
 }: {
-  initialBody: string;
-  staffSalonName: string | null;
-  /** Server-computed - see actions/lineTemplateSettings.ts. This same body is now also the LINE confirmation text (plan: 予約完了ライン・予約完了メールの統合), so its "LINEへテスト送信" button follows the same gate as the reminder form's. */
+  initialReminderBody: string;
   testSendAvailable: boolean;
+  staffSalonName: string | null;
 }) {
-  const [body, setBody] = useState(() => templateToEditorText(initialBody));
+  const [body, setBody] = useState(() => templateToEditorText(initialReminderBody));
   const [previewOpen, setPreviewOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [isTestSending, setIsTestSending] = useState(false);
@@ -69,15 +71,13 @@ export function ReservationEmailTemplateForm({
   }
 
   function handleReset() {
-    // Client-side only - resets the form, not the saved DB row. The staff
-    // must still press 保存する to persist this back to the database.
     if (body !== DEFAULT_EDITOR_TEXT && !window.confirm("初期文面に戻しますか？現在の編集内容は失われます。")) return;
     setBody(DEFAULT_EDITOR_TEXT);
   }
 
   function handleSave() {
     startTransition(async () => {
-      const result = await updateReservationEmailTemplate({ body: editorTextToTemplate(body) });
+      const result = await updateLineReminderTemplate({ body: editorTextToTemplate(body) });
       if (!result.ok) {
         if (result.reason === "UNKNOWN_TAG") {
           toast.error(`{{${result.tag}}} は使用できない差し込み項目です`);
@@ -86,14 +86,14 @@ export function ReservationEmailTemplateForm({
         }
         return;
       }
-      toast.success("予約完了メールを保存しました");
+      toast.success("前日リマインドLINEを保存しました");
     });
   }
 
   async function handleTestSend() {
     setIsTestSending(true);
     try {
-      const result = await sendLineConfirmationTestMessage(renderReservationEmailTemplate(editorTextToTemplate(body), previewVariables));
+      const result = await sendLineReminderTestMessage(renderReservationEmailTemplate(editorTextToTemplate(body), previewVariables));
       if (!result.ok) {
         toast.error("テスト送信に失敗しました。LINE連携設定をご確認ください。");
         return;
@@ -109,21 +109,21 @@ export function ReservationEmailTemplateForm({
 
   return (
     <section className="rounded-xl border border-border bg-card p-4">
-      <p className="mb-1 text-sm font-semibold text-foreground">予約完了メール</p>
+      <p className="mb-1 text-sm font-semibold text-foreground">前日リマインドLINE</p>
       <p className="mb-3 text-xs text-muted-foreground">
-        予約確定後にお客様へ送信するメール本文です。件名は変更できません。LINE連携済みのお客様には、この本文がそのまま予約完了LINEとしても送信されます。
+        LINE連携済みのお客様へ、予約前日の19時台に送信します。未連携のお客様には送信されません（メールもこの通知の対象外です）。
       </p>
 
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="reservation-email-body">本文</Label>
+          <Label htmlFor="line-reminder-body">本文</Label>
           <Textarea
-            id="reservation-email-body"
+            id="line-reminder-body"
             ref={textareaRef}
             value={body}
             onChange={(e) => setBody(e.target.value)}
             maxLength={4000}
-            className="min-h-64 text-base"
+            className="min-h-48 text-base"
           />
         </div>
 
@@ -147,16 +147,16 @@ export function ReservationEmailTemplateForm({
           </Button>
           {testSendAvailable && (
             <Button variant="outline" size="touch" disabled={isPending || isTestSending} onClick={handleTestSend}>
-              {isTestSending ? "送信中..." : "LINEへテスト送信"}
+              {isTestSending ? "送信中..." : "テスト送信"}
             </Button>
           )}
           <Button size="touch" disabled={isPending} onClick={handleSave}>
-            {isPending ? "保存中..." : "メール本文を保存"}
+            {isPending ? "保存中..." : "リマインドLINEを保存"}
           </Button>
         </div>
       </div>
 
-      <ResponsiveDialogOrSheet open={previewOpen} onOpenChange={setPreviewOpen} title="予約完了メールのプレビュー">
+      <ResponsiveDialogOrSheet open={previewOpen} onOpenChange={setPreviewOpen} title="前日リマインドLINEのプレビュー">
         <div className="whitespace-pre-wrap break-words text-sm text-foreground">{preview}</div>
       </ResponsiveDialogOrSheet>
     </section>

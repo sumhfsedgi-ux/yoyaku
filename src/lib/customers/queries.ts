@@ -10,6 +10,8 @@ export interface CustomerListItem {
   totalVisits: number;
   totalRevenue: number;
   lastVisitDate: Date | null;
+  /** "LINE連携済み" badge only - the raw lineUserId itself is never selected into this list type (plan §24). */
+  lineLinked: boolean;
 }
 
 /**
@@ -23,7 +25,7 @@ export async function listCustomers(ownerStaffId: string): Promise<CustomerListI
   const [customers, totals] = await Promise.all([
     prisma.customer.findMany({
       where: { ownerStaffId },
-      select: { id: true, name: true, email: true, phone: true, firstVisitDate: true },
+      select: { id: true, name: true, email: true, phone: true, firstVisitDate: true, lineUserId: true },
       orderBy: { name: "asc" },
     }),
     prisma.visitRecord.groupBy({
@@ -48,6 +50,7 @@ export async function listCustomers(ownerStaffId: string): Promise<CustomerListI
       totalVisits: totalsForCustomer?._count._all ?? 0,
       totalRevenue: totalsForCustomer?._sum.amount ?? 0,
       lastVisitDate: totalsForCustomer?._max.visitDate ?? null,
+      lineLinked: c.lineUserId !== null,
     };
   });
 }
@@ -74,6 +77,8 @@ export interface CustomerDetail {
   totalVisits: number;
   totalRevenue: number;
   visitRecords: VisitRecordListItem[];
+  /** "LINE連携済み" badge only - the raw lineUserId is never returned here (plan §24/§25). */
+  lineLinked: boolean;
 }
 
 /**
@@ -100,6 +105,7 @@ export async function getCustomerDetail(customerId: string, viewerStaffId: strin
         phone: true,
         firstVisitDate: true,
         firstVisitAcquisitionSource: { select: { id: true, name: true } },
+        lineUserId: true,
       },
     }),
     prisma.visitRecord.aggregate({ where: { customerId }, _sum: { amount: true }, _count: { _all: true } }),
@@ -130,5 +136,6 @@ export async function getCustomerDetail(customerId: string, viewerStaffId: strin
     totalVisits: totals._count._all,
     totalRevenue: totals._sum.amount ?? 0,
     visitRecords,
+    lineLinked: customer.lineUserId !== null,
   };
 }

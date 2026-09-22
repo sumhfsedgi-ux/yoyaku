@@ -30,3 +30,29 @@ export function isExclusionConstraintViolation(err: unknown): boolean {
   const message = typeof anyErr.message === "string" ? anyErr.message : "";
   return message.includes("23P01") || message.includes("reservation_no_room_overlap");
 }
+
+/**
+ * Detects a unique-constraint violation (Postgres SQLSTATE 23505), using the
+ * same detection strategy as isExclusionConstraintViolation above: check the
+ * raw Postgres SQLSTATE first (the stable signal), then Prisma's own P2002
+ * code as a secondary signal. Used by the Customer.lineUserId upsert (see
+ * lib/reservations/service.ts) to safely retry without lineUserId when a
+ * race condition slips past the pre-check (@@unique([ownerStaffId,
+ * lineUserId]) - see prisma/schema.prisma) - a LINE-linking conflict must
+ * never fail the reservation itself.
+ */
+export function isUniqueConstraintViolation(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const anyErr = err as Record<string, unknown>;
+
+  const driverCause = (anyErr.meta as Record<string, unknown> | undefined)?.driverAdapterError as
+    | Record<string, unknown>
+    | undefined;
+  const cause = driverCause?.cause as Record<string, unknown> | undefined;
+  if (cause?.code === "23505" || cause?.originalCode === "23505") return true;
+
+  if (anyErr.code === "P2002") return true;
+
+  const message = typeof anyErr.message === "string" ? anyErr.message : "";
+  return message.includes("23505");
+}

@@ -35,6 +35,8 @@ export const createReservationInputSchema = z
     contactOverride: customerInputSchema.optional(),
     /** Honeypot field - must always be empty for a genuine submission. See actions/booking.ts. */
     website: z.string().max(0).optional().or(z.literal("")),
+    /** Raw LIFF/LINE Login ID Token - see CreateReservationInput.lineIdToken in lib/reservations/service.ts. */
+    lineIdToken: z.string().min(1).optional(),
   })
   .refine((v) => (v.customer ? 1 : 0) + (v.customerId ? 1 : 0) === 1, {
     message: "顧客情報を指定してください",

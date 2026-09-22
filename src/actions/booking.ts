@@ -17,6 +17,8 @@ export interface CreateCustomerReservationInput {
   customer: { name: string; email: string; phone: string };
   /** Honeypot field name, rendered off-screen in BookingFlow - see components/reserve/HoneypotField.tsx. */
   website?: string;
+  /** Raw LIFF/LINE Login ID Token, only present when booking via /reserve/liff - see CreateReservationInput.lineIdToken. */
+  lineIdToken?: string;
 }
 
 /**
@@ -41,5 +43,6 @@ export async function createCustomerReservation(
     source: "CUSTOMER_ONLINE",
     customer: input.customer,
     website: input.website,
+    lineIdToken: input.lineIdToken,
   });
 }

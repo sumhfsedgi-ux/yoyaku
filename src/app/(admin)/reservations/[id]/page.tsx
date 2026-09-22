@@ -19,6 +19,18 @@ const SYNC_STATUS_LABEL: Record<string, { label: string; variant: "default" | "o
   NOT_APPLICABLE: { label: "Google未連携", variant: "outline" },
 };
 
+const LINE_NOTIFICATION_TYPE_LABEL: Record<string, string> = {
+  LINE_CONFIRMATION: "予約完了LINE",
+  LINE_REMINDER: "リマインドLINE",
+};
+
+/** Status only, matching SYNC_STATUS_LABEL's shape - the row's retryKey/errorMessage are never surfaced to this UI (plan §24). */
+const LINE_NOTIFICATION_STATUS_LABEL: Record<string, { label: string; variant: "default" | "outline" | "destructive" }> = {
+  PENDING: { label: "送信中", variant: "outline" },
+  SENT: { label: "送信済み", variant: "outline" },
+  FAILED: { label: "送信失敗", variant: "destructive" },
+};
+
 export default async function ReservationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
 
@@ -55,6 +67,14 @@ export default async function ReservationDetailPage({ params }: { params: Promis
           {detail.status === "CONFIRMED" ? "確定" : "キャンセル済み"}
         </Badge>
         <Badge variant={syncStatus.variant}>{syncStatus.label}</Badge>
+        {detail.lineNotifications.map((n) => {
+          const status = LINE_NOTIFICATION_STATUS_LABEL[n.status];
+          return (
+            <Badge key={n.type} variant={status.variant}>
+              {LINE_NOTIFICATION_TYPE_LABEL[n.type]}: {status.label}
+            </Badge>
+          );
+        })}
       </div>
 
       <div className="mb-6 rounded-xl border border-border bg-card p-4">
