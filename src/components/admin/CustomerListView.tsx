@@ -58,7 +58,7 @@ export function CustomerListView({ customers }: { customers: CustomerListItem[] 
                   {customer.lineLinked && <Badge variant="secondary">LINE</Badge>}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  初回来店: {customer.firstVisitDate ? dateToJst(customer.firstVisitDate).toFormat("yyyy年M月d日") : "未設定"}
+                  前回来店: {customer.lastVisitDate ? dateToJst(customer.lastVisitDate).toFormat("yyyy年M月d日") : "未設定"}
                 </p>
               </div>
               <div className="text-right">
