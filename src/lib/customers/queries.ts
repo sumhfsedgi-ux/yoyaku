@@ -39,7 +39,7 @@ export async function listCustomers(ownerStaffId: string): Promise<CustomerListI
 
   const totalsByCustomerId = new Map(totals.map((t) => [t.customerId, t]));
 
-  return customers.map((c) => {
+  const items = customers.map((c) => {
     const totalsForCustomer = totalsByCustomerId.get(c.id);
     return {
       id: c.id,
@@ -52,6 +52,16 @@ export async function listCustomers(ownerStaffId: string): Promise<CustomerListI
       lastVisitDate: totalsForCustomer?._max.visitDate ?? null,
       lineLinked: c.lineUserId !== null,
     };
+  });
+
+  // Most recent lastVisitDate first; customers with no visit yet sort last.
+  // Relies on Array#sort's stability to keep the original name-asc order
+  // (from the customer.findMany orderBy above) as the tie-breaker.
+  return items.sort((a, b) => {
+    if (a.lastVisitDate === null && b.lastVisitDate === null) return 0;
+    if (a.lastVisitDate === null) return 1;
+    if (b.lastVisitDate === null) return -1;
+    return b.lastVisitDate.getTime() - a.lastVisitDate.getTime();
   });
 }
 
