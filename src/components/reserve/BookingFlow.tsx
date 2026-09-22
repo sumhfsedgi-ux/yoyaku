@@ -38,6 +38,7 @@ export function BookingFlow({
   initialGridError,
   lineIdToken,
   initialCustomer,
+  onFirstPaint,
 }: {
   bookingSlug: string;
   bookingWindowDays: number;
@@ -62,6 +63,14 @@ export function BookingFlow({
    * stays a normal editable input either way.
    */
   initialCustomer?: { name: string; email: string; phone: string } | null;
+  /**
+   * TEMPORARY, debug-only (perf investigation, see .claude/plans): fires
+   * once, after this component has mounted AND the browser has painted a
+   * frame (double requestAnimationFrame). Only app/reserve/liff/page.tsx
+   * passes this, to measure real time-to-interactive - no-op otherwise,
+   * never used by the plain /reserve/[slug] page.
+   */
+  onFirstPaint?: () => void;
 }) {
   const [step, setStep] = useState<Step>(0);
   const [dateISO, setDateISO] = useState<string | null>(null);
@@ -83,6 +92,15 @@ export function BookingFlow({
 
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    if (!onFirstPaint) return;
+    const raf1 = requestAnimationFrame(() => {
+      requestAnimationFrame(onFirstPaint);
+    });
+    return () => cancelAnimationFrame(raf1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once on mount only, not on every onFirstPaint identity change
+  }, []);
 
   const loadSlots = useCallback(
     (target: string) => {

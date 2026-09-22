@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import liff from "@line/liff";
 import { BookingFlow } from "@/components/reserve/BookingFlow";
@@ -13,6 +13,21 @@ type LoadState =
   | { phase: "loading" }
   | { phase: "error"; reason: string }
   | { phase: "ready"; data: ReadyData; idToken: string; linePrefill: { name: string; email: string; phone: string } | null };
+
+/**
+ * TEMPORARY (perf investigation, see .claude/plans): client-side phase
+ * timestamps, only ever populated when the resolved data.perfDebug is true
+ * (RESERVATION_PERF_DEBUG=1 AND this is the LINE-enabled staff). Held in a
+ * ref rather than state - most of these are captured well before there's
+ * anything new to render.
+ */
+interface PerfTimestamps {
+  t0: number;
+  t1?: number;
+  t2?: number;
+  t3?: number;
+  t4?: number;
+}
 
 /**
  * Single, staff-shared LIFF entry point (plan §11) - deliberately NOT
@@ -39,11 +54,18 @@ type LoadState =
 export default function LiffReservePage() {
   const router = useRouter();
   const [state, setState] = useState<LoadState>({ phase: "loading" });
+  const perfRef = useRef<PerfTimestamps | null>(null);
+  const [perfPanelText, setPerfPanelText] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
     async function run() {
+      // TEMPORARY (perf investigation, see .claude/plans): always started -
+      // cheap, a single number - but only ever surfaced/logged once
+      // data.perfDebug confirms this is the debug-eligible staff, below.
+      perfRef.current = { t0: performance.now() };
+
       const liffId = process.env.NEXT_PUBLIC_LIFF_ID;
       if (!liffId) {
         if (!cancelled) setState({ phase: "error", reason: "UNKNOWN" });
@@ -56,6 +78,7 @@ export default function LiffReservePage() {
         if (!cancelled) setState({ phase: "error", reason: "UNKNOWN" });
         return;
       }
+      if (perfRef.current) perfRef.current.t1 = performance.now();
 
       // Read `slug` only now that liff.init() has resolved - see module doc above.
       const slug = new URLSearchParams(window.location.search).get("slug");
@@ -69,6 +92,8 @@ export default function LiffReservePage() {
         if (!cancelled) setState({ phase: "error", reason: data.reason });
         return;
       }
+      if (perfRef.current) perfRef.current.t2 = performance.now();
+      if (!data.perfDebug) perfRef.current = null; // not the debug-eligible staff, or the flag is off - stop tracking
 
       if (!data.lineEnabled) {
         // Ineligible staff: never call liff.isLoggedIn()/login()/getIDToken()
@@ -93,14 +118,25 @@ export default function LiffReservePage() {
         if (!cancelled) setState({ phase: "error", reason: "UNKNOWN" });
         return;
       }
+      if (perfRef.current) perfRef.current.t3 = performance.now();
 
       // Best-effort: getLineCustomerPrefill never throws on its own, but the
       // extra .catch(() => null) here guarantees that even a hypothetical bug
       // in it degrades to a blank form via the "ready" branch below, rather
       // than tripping run().catch() and showing an error screen.
       const linePrefill = await getLineCustomerPrefill(slug, idToken).catch(() => null);
+      if (perfRef.current) perfRef.current.t4 = performance.now();
 
       if (!cancelled) setState({ phase: "ready", data, idToken, linePrefill });
+
+      const p = perfRef.current;
+      if (p && p.t1 !== undefined && p.t2 !== undefined && p.t3 !== undefined && p.t4 !== undefined) {
+        const t5 = performance.now();
+        const ms = (n: number) => n.toFixed(1);
+        setPerfPanelText(
+          `init:${ms(p.t1 - p.t0)} staffData:${ms(p.t2 - p.t1)} login:${ms(p.t3 - p.t2)} prefill:${ms(p.t4 - p.t3)} dataReady:${ms(t5 - p.t0)}`,
+        );
+      }
     }
 
     run().catch(() => {
@@ -111,6 +147,15 @@ export default function LiffReservePage() {
       cancelled = true;
     };
   }, [router]);
+
+  // TEMPORARY (perf investigation, see .claude/plans): fires once BookingFlow
+  // has actually painted - only wired up when data.perfDebug is true (see the
+  // render below). Duration-only, no PII.
+  function handlePerfFirstPaint() {
+    if (!perfRef.current) return;
+    const renderedMs = (performance.now() - perfRef.current.t0).toFixed(1);
+    setPerfPanelText((prev) => `${prev ?? ""} renderedReady:${renderedMs}`);
+  }
 
   if (state.phase === "loading") {
     return (
@@ -144,8 +189,15 @@ export default function LiffReservePage() {
           initialGridError={data.initialGridError}
           lineIdToken={idToken}
           initialCustomer={linePrefill}
+          onFirstPaint={data.perfDebug ? handlePerfFirstPaint : undefined}
         />
       </div>
+      {/* TEMPORARY (perf investigation, see .claude/plans): duration-only, no PII - only ever rendered for the RESERVATION_PERF_DEBUG-eligible staff. */}
+      {data.perfDebug && perfPanelText && (
+        <div className="fixed right-0 bottom-0 left-0 z-50 bg-black/80 px-3 py-2 text-center font-mono text-[10px] text-white">
+          [PERF] {perfPanelText}
+        </div>
+      )}
     </div>
   );
 }

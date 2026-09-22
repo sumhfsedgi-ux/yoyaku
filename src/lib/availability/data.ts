@@ -89,7 +89,16 @@ export const prismaAvailabilityDeps: ComputeSlotsDeps = {
     const calendarId = await resolveRoomCalendarId(roomId);
     if (!calendarId) return { ok: false };
 
+    // TEMPORARY (perf investigation, see .claude/plans): duration + success
+    // boolean only, gated behind its own dedicated flag - never the
+    // calendarId or any event content. Intentionally not staff-scoped (this
+    // runs for any staff's /reserve/[slug] or /reserve/liff), since it's
+    // server-log-only with no client-facing display.
+    const perfDebug = process.env.RESERVATION_PERF_DEBUG === "1";
+    const perfStart = perfDebug ? performance.now() : 0;
     const result = await getCalendarService().getFreeBusy(calendarId, rangeStart, rangeEnd);
+    if (perfDebug) console.log(`[perf:calendar] getFreeBusy ${(performance.now() - perfStart).toFixed(1)}ms ok=${result.ok}`);
+
     if (!result.ok) return { ok: false };
     return { ok: true, busy: result.busy };
   },

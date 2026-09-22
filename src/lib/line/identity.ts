@@ -41,6 +41,12 @@ export async function verifyLineIdToken(idToken: string): Promise<VerifyLineIdTo
   if (!clientId) return { ok: false, error: "LINE_LOGIN_NOT_CONFIGURED" };
   if (!idToken) return { ok: false, error: "MISSING_ID_TOKEN" };
 
+  // TEMPORARY (perf investigation, see .claude/plans): duration + HTTP status
+  // only, gated behind its own dedicated flag (never the general-purpose
+  // Prisma PERF_DEBUG) - never the token, never the response body.
+  const perfDebug = process.env.RESERVATION_PERF_DEBUG === "1";
+  const perfStart = perfDebug ? performance.now() : 0;
+
   let response: Response;
   try {
     response = await fetch(LINE_VERIFY_ENDPOINT, {
@@ -49,8 +55,10 @@ export async function verifyLineIdToken(idToken: string): Promise<VerifyLineIdTo
       body: new URLSearchParams({ id_token: idToken, client_id: clientId }).toString(),
     });
   } catch (err) {
+    if (perfDebug) console.log(`[perf:line] verify FAILED ${(performance.now() - perfStart).toFixed(1)}ms`);
     return { ok: false, error: `VERIFY_REQUEST_FAILED: ${describeError(err)}` };
   }
+  if (perfDebug) console.log(`[perf:line] verify ${(performance.now() - perfStart).toFixed(1)}ms status=${response.status}`);
 
   if (!response.ok) {
     // Never log the raw idToken or the full response body (may echo back
