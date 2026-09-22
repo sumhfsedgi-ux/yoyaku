@@ -5,14 +5,14 @@ import { useRouter } from "next/navigation";
 import liff from "@line/liff";
 import { BookingFlow } from "@/components/reserve/BookingFlow";
 import { ErrorState } from "@/components/ui/error-state";
-import { getStaffBookingPageData, getLineCustomerPrefill, type GetStaffBookingPageDataResult } from "@/actions/lineBookingPage";
+import { getLineBookingGate, getLineBookingBootstrap, type GetLineBookingBootstrapResult } from "@/actions/lineBookingPage";
 
-type ReadyData = Extract<GetStaffBookingPageDataResult, { ok: true }>;
+type ReadyData = Extract<GetLineBookingBootstrapResult, { ok: true }>;
 
 type LoadState =
   | { phase: "loading" }
   | { phase: "error"; reason: string }
-  | { phase: "ready"; data: ReadyData; idToken: string; linePrefill: { name: string; email: string; phone: string } | null };
+  | { phase: "ready"; data: ReadyData; idToken: string };
 
 /**
  * TEMPORARY (perf investigation, see .claude/plans): client-side phase
@@ -44,12 +44,13 @@ interface PerfTimestamps {
  * completes, including across the external-browser login redirect. Reading
  * location.search before that point is not reliable (see plan §11).
  *
- * Phase 1 staff scope (see lib/line/staffGate.ts): this page fetches
- * getStaffBookingPageData BEFORE ever touching liff.login()/getIDToken(), and
- * only proceeds with the LIFF login dance when the resolved staff is the one
- * LINE is enabled for. For every other staff it redirects straight to the
- * plain /reserve/[slug] page - LINE identity is never requested at all for
- * an ineligible staff, not even at the client.
+ * Phase 1 staff scope (see lib/line/staffGate.ts): this page calls the
+ * lightweight getLineBookingGate BEFORE ever touching liff.login()/
+ * getIDToken(), and only proceeds with the LIFF login dance + the heavier
+ * getLineBookingBootstrap call when the resolved staff is the one LINE is
+ * enabled for. For every other staff it redirects straight to the plain
+ * /reserve/[slug] page - LINE identity is never requested at all for an
+ * ineligible staff, not even at the client.
  */
 export default function LiffReservePage() {
   const router = useRouter();
@@ -87,19 +88,21 @@ export default function LiffReservePage() {
         return;
       }
 
-      const data = await getStaffBookingPageData(slug);
-      if (!data.ok) {
-        if (!cancelled) setState({ phase: "error", reason: data.reason });
+      // Lightweight gate: staff eligibility only, no availability/Calendar/
+      // Customer/LINE identity work - see actions/lineBookingPage.ts.
+      const gate = await getLineBookingGate(slug);
+      if (!gate.ok) {
+        if (!cancelled) setState({ phase: "error", reason: gate.reason });
         return;
       }
       if (perfRef.current) perfRef.current.t2 = performance.now();
-      if (!data.perfDebug) perfRef.current = null; // not the debug-eligible staff, or the flag is off - stop tracking
 
-      if (!data.lineEnabled) {
+      if (!gate.lineEnabled) {
         // Ineligible staff: never call liff.isLoggedIn()/login()/getIDToken()
         // for them - hand off to the ordinary, LINE-unaware booking page
         // instead. router.replace (not push) so this LIFF URL doesn't linger
         // in browser history underneath the plain booking page.
+        perfRef.current = null;
         router.replace(`/reserve/${slug}`);
         return;
       }
@@ -120,21 +123,29 @@ export default function LiffReservePage() {
       }
       if (perfRef.current) perfRef.current.t3 = performance.now();
 
-      // Best-effort: getLineCustomerPrefill never throws on its own, but the
-      // extra .catch(() => null) here guarantees that even a hypothetical bug
-      // in it degrades to a blank form via the "ready" branch below, rather
-      // than tripping run().catch() and showing an error screen.
-      const linePrefill = await getLineCustomerPrefill(slug, idToken).catch(() => null);
+      // Single Server Action: fetches the booking page data (incl. Google
+      // FreeBusy) AND verifies the LINE identity + looks up a returning
+      // customer's prefill, running the two independent external waits
+      // concurrently server-side (see actions/lineBookingPage.ts). Unlike
+      // the old prefill-only call, this one genuinely can throw (it also
+      // supplies the availability grid, without which there's no meaningful
+      // page) - run().catch() below handles that as an error screen.
+      const data = await getLineBookingBootstrap(slug, idToken);
+      if (!data.ok) {
+        if (!cancelled) setState({ phase: "error", reason: data.reason });
+        return;
+      }
       if (perfRef.current) perfRef.current.t4 = performance.now();
+      if (!data.perfDebug) perfRef.current = null; // not the debug-eligible staff, or the flag is off - stop tracking
 
-      if (!cancelled) setState({ phase: "ready", data, idToken, linePrefill });
+      if (!cancelled) setState({ phase: "ready", data, idToken });
 
       const p = perfRef.current;
       if (p && p.t1 !== undefined && p.t2 !== undefined && p.t3 !== undefined && p.t4 !== undefined) {
         const t5 = performance.now();
         const ms = (n: number) => n.toFixed(1);
         setPerfPanelText(
-          `init:${ms(p.t1 - p.t0)} staffData:${ms(p.t2 - p.t1)} login:${ms(p.t3 - p.t2)} prefill:${ms(p.t4 - p.t3)} dataReady:${ms(t5 - p.t0)}`,
+          `init:${ms(p.t1 - p.t0)} gate:${ms(p.t2 - p.t1)} login:${ms(p.t3 - p.t2)} bootstrap:${ms(p.t4 - p.t3)} dataReady:${ms(t5 - p.t0)}`,
         );
       }
     }
@@ -175,7 +186,7 @@ export default function LiffReservePage() {
     );
   }
 
-  const { data, idToken, linePrefill } = state;
+  const { data, idToken } = state;
   return (
     <div className="min-h-screen bg-background">
       <div className="mx-auto max-w-md px-4 py-8">
@@ -188,7 +199,7 @@ export default function LiffReservePage() {
           initialGridDays={data.initialGridDays}
           initialGridError={data.initialGridError}
           lineIdToken={idToken}
-          initialCustomer={linePrefill}
+          initialCustomer={data.customerPrefill}
           onFirstPaint={data.perfDebug ? handlePerfFirstPaint : undefined}
         />
       </div>

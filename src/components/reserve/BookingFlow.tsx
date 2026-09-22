@@ -58,7 +58,7 @@ export function BookingFlow({
    * Starting values for the contact fields below, if the caller already has
    * some (e.g. app/reserve/liff/page.tsx passing a returning LINE customer's
    * previous name/email/phone - see actions/lineBookingPage.ts's
-   * getLineCustomerPrefill). This component doesn't know or care where the
+   * getLineBookingBootstrap). This component doesn't know or care where the
    * values came from - it's just the useState initializer, and every field
    * stays a normal editable input either way.
    */
