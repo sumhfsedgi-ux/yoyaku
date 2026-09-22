@@ -173,10 +173,10 @@ describe("LINE booking integration (plan §1-3, §6-8, §10)", () => {
     expect(customer?.lineUserId).toBe("UoriginalLink"); // untouched
   });
 
-  it("the same LINE userId already owned by a DIFFERENT Customer row under this staff is skipped, not merged - the booking still succeeds", async () => {
+  it("booking under a NEW email with an already-linked lineUserId updates that SAME existing Customer row, rather than forking a second one (see 'editing the LINE-prefilled email' tests below for the full scenario this covers)", async () => {
     const staff = await setupRoomAndStaff();
     enableLineFor(staff.id);
-    await seedCustomer(staff.id, { email: "first-owner@example.com", lineUserId: "UsharedAccount" });
+    const existing = await seedCustomer(staff.id, { email: "first-owner@example.com", lineUserId: "UsharedAccount" });
     stubVerifiedIdToken("UsharedAccount");
 
     const result = await createReservation({
@@ -188,10 +188,10 @@ describe("LINE booking integration (plan §1-3, §6-8, §10)", () => {
     });
 
     expect(result.ok).toBe(true);
-    const second = await prisma.customer.findFirst({ where: { email: "second-email@example.com" } });
-    expect(second?.lineUserId).toBeNull(); // never merged/stolen from the first owner
-    const first = await prisma.customer.findFirst({ where: { email: "first-owner@example.com" } });
-    expect(first?.lineUserId).toBe("UsharedAccount"); // still intact
+    expect(await prisma.customer.count({ where: { ownerStaffId: staff.id } })).toBe(1); // no second Customer row created
+    const updated = await prisma.customer.findUnique({ where: { id: existing.id } });
+    expect(updated?.email).toBe("second-email@example.com"); // same Customer.id, email updated
+    expect(updated?.lineUserId).toBe("UsharedAccount"); // LINE link preserved on the same row
   });
 
   it("Staff isolation at the DB level: the same LINE userId can independently belong to Customer rows under two different staff (@@unique is scoped by ownerStaffId)", async () => {
@@ -211,5 +211,53 @@ describe("LINE booking integration (plan §1-3, §6-8, §10)", () => {
     const customers = await prisma.customer.findMany({ where: { lineUserId: "UcrossStaff" } });
     expect(customers).toHaveLength(2);
     expect(new Set(customers.map((c) => c.ownerStaffId))).toEqual(new Set([staffA.id, staffB.id]));
+  });
+
+  it("booking again with the SAME (unedited) LINE-prefilled email still updates the same existing Customer as before", async () => {
+    const staff = await setupRoomAndStaff();
+    enableLineFor(staff.id);
+    const existing = await seedCustomer(staff.id, { name: "田中花子", email: "old@example.com", phone: "09011112222", lineUserId: "Uxxx" });
+    stubVerifiedIdToken("Uxxx");
+
+    const result = await createReservation({
+      staffId: staff.id,
+      startAtUtcIso: MONDAY_START,
+      source: "CUSTOMER_ONLINE",
+      customer: { name: "田中花子", email: "old@example.com", phone: "09011112222" },
+      lineIdToken: "a-real-looking-token",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(await prisma.customer.count({ where: { ownerStaffId: staff.id } })).toBe(1);
+    const updated = await prisma.customer.findUnique({ where: { id: existing.id } });
+    expect(updated?.email).toBe("old@example.com");
+    expect(updated?.lineUserId).toBe("Uxxx");
+  });
+
+  it("editing the LINE-prefilled email to one already owned by a DIFFERENT Customer under this staff: booking still succeeds, the email is left unchanged, but the reservation's own snapshot uses the submitted value (so the confirmation email still goes to the right address)", async () => {
+    const staff = await setupRoomAndStaff();
+    enableLineFor(staff.id);
+    const existing = await seedCustomer(staff.id, { name: "田中花子", email: "old@example.com", phone: "09011112222", lineUserId: "Uxxx" });
+    await seedCustomer(staff.id, { name: "別の客", email: "taken@example.com" });
+    stubVerifiedIdToken("Uxxx");
+
+    const result = await createReservation({
+      staffId: staff.id,
+      startAtUtcIso: MONDAY_START,
+      source: "CUSTOMER_ONLINE",
+      customer: { name: "田中花子", email: "taken@example.com", phone: "09011112222" },
+      lineIdToken: "a-real-looking-token",
+    });
+
+    expect(result.ok).toBe(true); // never fails the booking over an email collision
+    expect(await prisma.customer.count({ where: { ownerStaffId: staff.id } })).toBe(2); // no merge, no new duplicate
+
+    const updated = await prisma.customer.findUnique({ where: { id: existing.id } });
+    expect(updated?.email).toBe("old@example.com"); // unchanged - never overwrites the other customer's email
+    expect(updated?.lineUserId).toBe("Uxxx");
+
+    if (!result.ok) throw new Error("unreachable");
+    const reservation = await prisma.reservation.findUnique({ where: { id: result.reservationId } });
+    expect(reservation?.customerEmailSnapshot).toBe("taken@example.com"); // confirmation email still uses the submitted value
   });
 });

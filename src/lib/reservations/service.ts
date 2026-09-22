@@ -285,9 +285,11 @@ export async function createReservation(rawInput: CreateReservationInput): Promi
   // For every other staff, verifyLineIdToken is never even called - no
   // Customer.lineUserId can be newly acquired for them.
   let verifiedLineUserId: string | undefined;
+  let confirmedStaffId: string | undefined;
   if (!input.customerId && input.lineIdToken) {
     const confirmedStaff = await prisma.staff.findUnique({ where: { id: input.staffId }, select: { id: true } });
     if (confirmedStaff && isLineNotificationEnabledForStaff(confirmedStaff.id)) {
+      confirmedStaffId = confirmedStaff.id;
       const verified = await verifyLineIdToken(input.lineIdToken);
       if (verified.ok) verifiedLineUserId = verified.lineUserId;
     }
@@ -316,31 +318,75 @@ export async function createReservation(rawInput: CreateReservationInput): Promi
           phoneDigits: normalizePhoneDigits(input.customer!.phone),
         };
 
-        const resolvedLineUserId = verifiedLineUserId
-          ? await resolveLineUserIdForCustomerUpsert(tx, input.staffId, input.customer!.email, verifiedLineUserId)
-          : undefined;
+        // A verified LINE identity always takes priority over the submitted
+        // email for finding "who is this" - the email field can be freely
+        // edited (e.g. after LINE prefill autofills a returning customer's
+        // last-known email), and editing it must never fork a second
+        // Customer row for a LINE user who already has one under this staff,
+        // nor drop their existing LINE link. confirmedStaffId (not the raw
+        // input.staffId) is used here since it's the value the block above
+        // already re-derived from the DB before trusting it for LINE
+        // decisions; it is always set whenever verifiedLineUserId is.
+        const existingByLineUserId = verifiedLineUserId
+          ? await tx.customer.findUnique({
+              where: { ownerStaffId_lineUserId: { ownerStaffId: confirmedStaffId!, lineUserId: verifiedLineUserId } },
+              select: { id: true },
+            })
+          : null;
 
-        const upsertCustomer = (lineUserIdToSet: string | undefined) =>
-          tx.customer.upsert({
-            where: { ownerStaffId_email: { ownerStaffId: input.staffId, email: input.customer!.email } },
-            update: lineUserIdToSet !== undefined ? { ...baseUpdateData, lineUserId: lineUserIdToSet } : baseUpdateData,
-            create: lineUserIdToSet !== undefined ? { ...baseCreateData, lineUserId: lineUserIdToSet } : baseCreateData,
+        if (existingByLineUserId) {
+          // Pre-check whether the submitted email already belongs to a
+          // DIFFERENT Customer row under this staff, rather than attempting
+          // the update and catching a failure: Postgres aborts the whole
+          // transaction after any failed statement, so a second query on the
+          // same tx after a unique-constraint error would only ever surface
+          // "current transaction is aborted" (25P02), never let a clean retry
+          // actually succeed - unlike resolveLineUserIdForCustomerUpsert's
+          // similar pre-check below, this one isn't just an optimization.
+          const emailOwner = await tx.customer.findUnique({
+            where: { ownerStaffId_email: { ownerStaffId: confirmedStaffId!, email: input.customer!.email } },
+            select: { id: true },
           });
+          const emailCollidesWithAnotherCustomer = emailOwner !== null && emailOwner.id !== existingByLineUserId.id;
 
-        try {
-          customer = await upsertCustomer(resolvedLineUserId);
-        } catch (err) {
-          // A race with another concurrent request slipped past
-          // resolveLineUserIdForCustomerUpsert's pre-check (e.g. two bookings
-          // by the same LINE user under different emails, at the same
-          // instant) and hit the @@unique([ownerStaffId, lineUserId])
-          // constraint. Retry without lineUserId so the reservation itself
-          // always succeeds - a LINE-linking conflict must never fail a
-          // booking (plan §12).
-          if (resolvedLineUserId !== undefined && isUniqueConstraintViolation(err)) {
-            customer = await upsertCustomer(undefined);
-          } else {
-            throw err;
+          // On a collision, never fail the booking or merge into that other
+          // row - keep this customer's existing email and only update name/
+          // phone. The confirmation email/LINE message still go to the
+          // submitted email regardless, since sendBookingNotificationsBestEffort
+          // prefers the reservation's own contact snapshot (set below from
+          // input.customer, always the submitted values) over the live
+          // Customer row.
+          customer = await tx.customer.update({
+            where: { id: existingByLineUserId.id },
+            data: emailCollidesWithAnotherCustomer ? baseUpdateData : { ...baseUpdateData, email: input.customer!.email },
+          });
+        } else {
+          const resolvedLineUserId = verifiedLineUserId
+            ? await resolveLineUserIdForCustomerUpsert(tx, input.staffId, input.customer!.email, verifiedLineUserId)
+            : undefined;
+
+          const upsertCustomer = (lineUserIdToSet: string | undefined) =>
+            tx.customer.upsert({
+              where: { ownerStaffId_email: { ownerStaffId: input.staffId, email: input.customer!.email } },
+              update: lineUserIdToSet !== undefined ? { ...baseUpdateData, lineUserId: lineUserIdToSet } : baseUpdateData,
+              create: lineUserIdToSet !== undefined ? { ...baseCreateData, lineUserId: lineUserIdToSet } : baseCreateData,
+            });
+
+          try {
+            customer = await upsertCustomer(resolvedLineUserId);
+          } catch (err) {
+            // A race with another concurrent request slipped past
+            // resolveLineUserIdForCustomerUpsert's pre-check (e.g. two bookings
+            // by the same LINE user under different emails, at the same
+            // instant) and hit the @@unique([ownerStaffId, lineUserId])
+            // constraint. Retry without lineUserId so the reservation itself
+            // always succeeds - a LINE-linking conflict must never fail a
+            // booking (plan §12).
+            if (resolvedLineUserId !== undefined && isUniqueConstraintViolation(err)) {
+              customer = await upsertCustomer(undefined);
+            } else {
+              throw err;
+            }
           }
         }
       }

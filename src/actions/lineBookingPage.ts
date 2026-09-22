@@ -5,6 +5,8 @@ import { resolveStaffByBookingSlug } from "@/lib/reservations/staffLookup";
 import { getAvailableSlotRangeStatus } from "@/actions/availability";
 import { SALON_TIME_ZONE } from "@/lib/availability/types";
 import { isLineNotificationEnabledForStaff } from "@/lib/line/staffGate";
+import { verifyLineIdToken } from "@/lib/line/identity";
+import { prisma } from "@/lib/db/prisma";
 import type { TwoWeekDayStatus } from "@/components/reserve/TwoWeekAvailabilityGrid";
 
 export type GetStaffBookingPageDataResult =
@@ -60,4 +62,50 @@ export async function getStaffBookingPageData(bookingSlug: string): Promise<GetS
     initialGridError: initialGrid.ok ? null : (initialGrid.reason ?? "UNKNOWN"),
     lineEnabled: isLineNotificationEnabledForStaff(staff.id),
   };
+}
+
+/**
+ * Returns a returning LINE customer's name/email/phone to pre-fill the
+ * booking form, or null for every other case (first-time booker, unverified/
+ * invalid token, staff not LINE-enabled, staff not found/inactive, no
+ * matching Customer row, or any unexpected error) - the caller never learns
+ * WHY there's no pre-fill, only that there isn't one, so the form just shows
+ * blank fields exactly as it always has.
+ *
+ * Deliberately resolves staffId server-side from bookingSlug only (same
+ * pattern as getStaffBookingPageData above) and derives lineUserId only from
+ * verifyLineIdToken's own verification of lineIdToken - never from any
+ * client-supplied identifier. Customer lookup is scoped by
+ * (ownerStaffId, lineUserId) together via the @@unique compound key, so one
+ * staff's LINE customer can never surface another staff's data.
+ */
+export async function getLineCustomerPrefill(
+  bookingSlug: string,
+  lineIdToken: string,
+): Promise<{ name: string; email: string; phone: string } | null> {
+  if (!bookingSlug || !lineIdToken) return null;
+
+  try {
+    const staff = await resolveStaffByBookingSlug(bookingSlug);
+    if (!staff || !staff.active) return null;
+
+    if (!isLineNotificationEnabledForStaff(staff.id)) return null;
+
+    const verified = await verifyLineIdToken(lineIdToken);
+    if (!verified.ok) return null;
+
+    const customer = await prisma.customer.findUnique({
+      where: { ownerStaffId_lineUserId: { ownerStaffId: staff.id, lineUserId: verified.lineUserId } },
+      select: { name: true, email: true, phone: true },
+    });
+    if (!customer) return null;
+
+    return { name: customer.name, email: customer.email, phone: customer.phone };
+  } catch {
+    // Never surface a failure here as anything but "no prefill". A fixed,
+    // PII-free message only - no token/email/phone/lineUserId/DB value/error
+    // object, since a caught error's own message could echo one of those.
+    console.warn("[LINE_CUSTOMER_PREFILL_FAILED]");
+    return null;
+  }
 }

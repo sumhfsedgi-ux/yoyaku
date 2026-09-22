@@ -5,14 +5,14 @@ import { useRouter } from "next/navigation";
 import liff from "@line/liff";
 import { BookingFlow } from "@/components/reserve/BookingFlow";
 import { ErrorState } from "@/components/ui/error-state";
-import { getStaffBookingPageData, type GetStaffBookingPageDataResult } from "@/actions/lineBookingPage";
+import { getStaffBookingPageData, getLineCustomerPrefill, type GetStaffBookingPageDataResult } from "@/actions/lineBookingPage";
 
 type ReadyData = Extract<GetStaffBookingPageDataResult, { ok: true }>;
 
 type LoadState =
   | { phase: "loading" }
   | { phase: "error"; reason: string }
-  | { phase: "ready"; data: ReadyData; idToken: string };
+  | { phase: "ready"; data: ReadyData; idToken: string; linePrefill: { name: string; email: string; phone: string } | null };
 
 /**
  * Single, staff-shared LIFF entry point (plan §11) - deliberately NOT
@@ -94,7 +94,13 @@ export default function LiffReservePage() {
         return;
       }
 
-      if (!cancelled) setState({ phase: "ready", data, idToken });
+      // Best-effort: getLineCustomerPrefill never throws on its own, but the
+      // extra .catch(() => null) here guarantees that even a hypothetical bug
+      // in it degrades to a blank form via the "ready" branch below, rather
+      // than tripping run().catch() and showing an error screen.
+      const linePrefill = await getLineCustomerPrefill(slug, idToken).catch(() => null);
+
+      if (!cancelled) setState({ phase: "ready", data, idToken, linePrefill });
     }
 
     run().catch(() => {
@@ -124,7 +130,7 @@ export default function LiffReservePage() {
     );
   }
 
-  const { data, idToken } = state;
+  const { data, idToken, linePrefill } = state;
   return (
     <div className="min-h-screen bg-background">
       <div className="mx-auto max-w-md px-4 py-8">
@@ -137,6 +143,7 @@ export default function LiffReservePage() {
           initialGridDays={data.initialGridDays}
           initialGridError={data.initialGridError}
           lineIdToken={idToken}
+          initialCustomer={linePrefill}
         />
       </div>
     </div>

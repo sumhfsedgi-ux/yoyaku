@@ -37,6 +37,7 @@ export function BookingFlow({
   initialGridDays,
   initialGridError,
   lineIdToken,
+  initialCustomer,
 }: {
   bookingSlug: string;
   bookingWindowDays: number;
@@ -52,6 +53,15 @@ export function BookingFlow({
    * (date/time selection, contact form) is unchanged.
    */
   lineIdToken?: string;
+  /**
+   * Starting values for the contact fields below, if the caller already has
+   * some (e.g. app/reserve/liff/page.tsx passing a returning LINE customer's
+   * previous name/email/phone - see actions/lineBookingPage.ts's
+   * getLineCustomerPrefill). This component doesn't know or care where the
+   * values came from - it's just the useState initializer, and every field
+   * stays a normal editable input either way.
+   */
+  initialCustomer?: { name: string; email: string; phone: string } | null;
 }) {
   const [step, setStep] = useState<Step>(0);
   const [dateISO, setDateISO] = useState<string | null>(null);
@@ -65,9 +75,9 @@ export function BookingFlow({
   const [gridLoading, setGridLoading] = useState(false);
   const [gridError, setGridError] = useState<string | null>(initialGridError);
 
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
+  const [name, setName] = useState(initialCustomer?.name ?? "");
+  const [email, setEmail] = useState(initialCustomer?.email ?? "");
+  const [phone, setPhone] = useState(initialCustomer?.phone ?? "");
   const [website, setWebsite] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
