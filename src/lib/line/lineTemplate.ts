@@ -25,3 +25,24 @@ export const DEFAULT_LINE_REMINDER_BODY = `{{customerName}} 様
 {{salonName}}
 
 明日お会いできるのを楽しみにしております。`;
+
+/**
+ * Staff-facing (not customer-facing) push sent to every
+ * LINE_STAFF_NOTIFICATION_USER_IDS entry when a new CUSTOMER_ONLINE
+ * reservation is confirmed for LINE_ENABLED_STAFF_ID - see
+ * lib/reservations/service.ts's sendBookingNotificationsBestEffort and
+ * lib/reservations/lineNotifications.ts's STAFF_NEW_RESERVATION type.
+ * Deliberately code-only for Phase 1, not Settings-editable like the two
+ * bodies above - reuses the exact same {{tag}} substitution
+ * (renderReservationEmailTemplate) but intentionally carries only
+ * customerName/reservationDateTime/salonName, never email/phone/LINE
+ * userId/chart notes - a staff member only needs "誰の何時の予約か" from
+ * this push.
+ */
+export const DEFAULT_STAFF_NEW_RESERVATION_MESSAGE = `【新規予約が入りました📅】
+
+お客様：{{customerName}} 様
+予約日時：{{reservationDateTime}}
+サロン：{{salonName}}
+
+予約管理画面からご確認ください。`;

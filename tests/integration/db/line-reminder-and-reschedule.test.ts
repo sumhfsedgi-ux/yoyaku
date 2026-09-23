@@ -113,7 +113,7 @@ describe("LINE reminder Cron + dedupe + reschedule interaction (plan §10-16)", 
     expect(fakeLine.sent[0].to).toBe("Ueligible");
 
     const notification = await prisma.reservationNotification.findUnique({
-      where: { reservationId_type: { reservationId: eligibleReservation.id, type: "LINE_REMINDER" } },
+      where: { reservationId_type_recipientKey: { reservationId: eligibleReservation.id, type: "LINE_REMINDER", recipientKey: "" } },
     });
     expect(notification?.status).toBe("SENT");
   });
@@ -195,7 +195,7 @@ describe("LINE reminder Cron + dedupe + reschedule interaction (plan §10-16)", 
     });
     await rescheduleReservation({ reservationId: reservation.id, newStartAtUtcIso: newStart.plus({ days: 1 }).toUTC().toISO()! });
     const confirmationRow = await prisma.reservationNotification.findUnique({
-      where: { reservationId_type: { reservationId: reservation.id, type: "LINE_CONFIRMATION" } },
+      where: { reservationId_type_recipientKey: { reservationId: reservation.id, type: "LINE_CONFIRMATION", recipientKey: "" } },
     });
     expect(confirmationRow).not.toBeNull();
   });

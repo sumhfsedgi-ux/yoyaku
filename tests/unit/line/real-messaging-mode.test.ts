@@ -4,6 +4,7 @@ import { RealLineMessagingService } from "@/lib/line/messaging/real";
 const ORIGINAL_MODE = process.env.LINE_NOTIFICATION_MODE;
 const ORIGINAL_TEST_USER = process.env.LINE_TEST_USER_ID;
 const ORIGINAL_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+const ORIGINAL_STAFF_RECIPIENTS = process.env.LINE_STAFF_NOTIFICATION_USER_IDS;
 
 /**
  * Exercises RealLineMessagingService's own internal mode guard (plan §17
@@ -22,6 +23,7 @@ describe("RealLineMessagingService: LINE_NOTIFICATION_MODE is enforced even if a
       ["LINE_NOTIFICATION_MODE", ORIGINAL_MODE],
       ["LINE_TEST_USER_ID", ORIGINAL_TEST_USER],
       ["LINE_CHANNEL_ACCESS_TOKEN", ORIGINAL_TOKEN],
+      ["LINE_STAFF_NOTIFICATION_USER_IDS", ORIGINAL_STAFF_RECIPIENTS],
     ] as const) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -46,6 +48,32 @@ describe("RealLineMessagingService: LINE_NOTIFICATION_MODE is enforced even if a
     vi.stubGlobal("fetch", fetchSpy);
 
     const result = await new RealLineMessagingService().pushMessage({ to: "UsomeoneElse", text: "hi", retryKey: "key-2" });
+
+    expect(result).toEqual({ ok: false, error: "TEST_MODE_BLOCKED_NON_TEST_RECIPIENT" });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('mode "test": a LINE_STAFF_NOTIFICATION_USER_IDS entry is allowed through even though it is not LINE_TEST_USER_ID', async () => {
+    process.env.LINE_NOTIFICATION_MODE = "test";
+    process.env.LINE_TEST_USER_ID = "Utestuser";
+    process.env.LINE_STAFF_NOTIFICATION_USER_IDS = "Uyukino,Ukazuki";
+    const fetchSpy = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await new RealLineMessagingService().pushMessage({ to: "Ukazuki", text: "hi", retryKey: "key-staff-1" });
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('mode "test": a recipient that is neither LINE_TEST_USER_ID nor in LINE_STAFF_NOTIFICATION_USER_IDS is still blocked', async () => {
+    process.env.LINE_NOTIFICATION_MODE = "test";
+    process.env.LINE_TEST_USER_ID = "Utestuser";
+    process.env.LINE_STAFF_NOTIFICATION_USER_IDS = "Uyukino,Ukazuki";
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await new RealLineMessagingService().pushMessage({ to: "UrandomOutsider", text: "hi", retryKey: "key-staff-2" });
 
     expect(result).toEqual({ ok: false, error: "TEST_MODE_BLOCKED_NON_TEST_RECIPIENT" });
     expect(fetchSpy).not.toHaveBeenCalled();
