@@ -441,8 +441,8 @@ model LineTemplateSettings {
   updatedAt    DateTime @updatedAt @db.Timestamptz
 }
 
-/// One row per (reservation, notification type) attempt - the DB-level
-/// dedupe/claim mechanism for LINE sends (see plan: two-phase
+/// One row per (reservation, notification type, recipient) attempt - the
+/// DB-level dedupe/claim mechanism for LINE sends (see plan: two-phase
 /// claim-then-update, using @@unique below as the sole source of truth for
 /// "has this been claimed" rather than any in-memory flag). A cron re-run or
 /// concurrent request racing to send the same notification will have exactly
@@ -455,6 +455,23 @@ model LineTemplateSettings {
 /// itself also de-duplicates, independent of our own DB constraint (belt and
 /// suspenders - see src/lib/reservations/lineNotifications.ts).
 ///
+/// recipientKey (added in the "PR1" additive migration of the staff-LINE-
+/// notification plan): always "" for LINE_CONFIRMATION/LINE_REMINDER - these
+/// types have exactly one recipient (the reservation's own customer), so the
+/// (reservationId, type) pair alone already identifies "who" and this column
+/// changes nothing about their dedupe behavior. A future type with multiple
+/// simultaneous recipients per reservation (e.g. a staff-facing notification
+/// sent to more than one internal LINE account) sets recipientKey to a
+/// per-recipient value (never the raw recipient identifier - see
+/// lib/reservations/lineNotifications.ts for what's actually stored) so each
+/// recipient claims/dedupes independently under the same type. The legacy
+/// @@unique([reservationId, type]) is kept alongside the new 3-column unique
+/// during this transition PR specifically so this column's addition is pure
+/// migration-A-of-two, additive, zero-behavior-change; a later PR drops the
+/// legacy constraint (migration B) only once this PR has run safely in
+/// production, and only then can a second notification type actually use a
+/// non-"" recipientKey.
+///
 /// Deliberately minimal for Phase 1: no retry-count/channel/payload-snapshot
 /// columns. Future notification types (LINE_RESCHEDULE, LINE_CANCELLATION,
 /// etc.) are added as new enum values only - this table never needs new
@@ -464,6 +481,7 @@ model ReservationNotification {
   reservationId String
   reservation   Reservation                    @relation(fields: [reservationId], references: [id])
   type          ReservationNotificationType
+  recipientKey  String                         @default("")
   status        ReservationNotificationStatus
   retryKey      String                         @unique
   sentAt        DateTime?                      @db.Timestamptz
@@ -471,7 +489,8 @@ model ReservationNotification {
   createdAt     DateTime                       @default(now()) @db.Timestamptz
   updatedAt     DateTime                       @updatedAt @db.Timestamptz
 
-  @@unique([reservationId, type])
+  @@unique([reservationId, type], map: "ReservationNotification_reservationId_type_key")
+  @@unique([reservationId, type, recipientKey])
 }
 
 /// DB-backed fixed-window rate limiting for public endpoints. Required because

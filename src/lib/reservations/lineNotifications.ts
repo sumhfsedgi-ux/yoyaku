@@ -79,10 +79,22 @@ export async function claimAndSendLineNotification(params: {
     return { ok: false, reason: "MODE_TEST_NON_TEST_RECIPIENT" };
   }
 
+  // Always "" for now - both LineNotificationType values today
+  // (LINE_CONFIRMATION/LINE_REMINDER) have exactly one possible recipient
+  // (the reservation's own customer), so (reservationId, type) alone already
+  // identifies "who". Passed explicitly (rather than relying on the column's
+  // DB default) so this code already targets the new 3-column unique
+  // constraint below - see ReservationNotification's schema.prisma doc
+  // comment for why recipientKey exists and why the legacy 2-column unique
+  // constraint is kept in place alongside it for now. A later change
+  // introduces a non-"" recipientKey for a notification type with more than
+  // one simultaneous recipient.
+  const recipientKey = "";
+
   const retryKey = randomUUID();
   try {
     await prisma.reservationNotification.create({
-      data: { reservationId: params.reservationId, type: params.type, status: "PENDING", retryKey },
+      data: { reservationId: params.reservationId, type: params.type, recipientKey, status: "PENDING", retryKey },
     });
   } catch (err) {
     if (isUniqueConstraintViolation(err)) return { ok: false, reason: "ALREADY_CLAIMED" };
@@ -93,14 +105,14 @@ export async function claimAndSendLineNotification(params: {
 
   if (result.ok) {
     await prisma.reservationNotification.update({
-      where: { reservationId_type: { reservationId: params.reservationId, type: params.type } },
+      where: { reservationId_type_recipientKey: { reservationId: params.reservationId, type: params.type, recipientKey } },
       data: { status: "SENT", sentAt: new Date() },
     });
     return { ok: true };
   }
 
   await prisma.reservationNotification.update({
-    where: { reservationId_type: { reservationId: params.reservationId, type: params.type } },
+    where: { reservationId_type_recipientKey: { reservationId: params.reservationId, type: params.type, recipientKey } },
     data: { status: "FAILED", errorMessage: result.error.slice(0, 500) },
   });
   return { ok: false, reason: "SEND_FAILED", error: result.error };
